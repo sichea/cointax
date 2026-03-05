@@ -3,20 +3,33 @@ const state = {
   pnlRecords: [],
   summary: null,
   packageFiles: null,
+  warnings: [],
 };
 
-const aliasMap = {
-  timestamp: ["timestamp", "time", "date", "datetime", "created_at", "executed"],
-  symbol: ["symbol", "market", "pair", "trading_pair", "coin_pair"],
-  side: ["side", "type", "trade_type", "order_side"],
-  price: ["price", "avg_price", "execution_price", "filled_price"],
-  amount: ["amount", "qty", "quantity", "filled", "executed_qty", "size"],
-  fee: ["fee", "commission", "trading_fee", "fee_amount"],
-  base_asset: ["base_asset", "base", "coin"],
-  quote_asset: ["quote_asset", "quote", "settle", "currency"],
+const EXCHANGE_PARSERS = {
+  Binance: {
+    columns: {
+      transactionId: ["id", "trade_id", "order_id"],
+      timestamp: ["date_utc", "time", "timestamp", "date", "create_time"],
+      symbol: ["pair", "symbol", "market", "trading_pair"],
+      side: ["side", "type", "direction"],
+      price: ["price", "avg_price", "executed_price"],
+      amount: ["amount", "executed", "filled", "executed_qty", "quantity", "qty"],
+      fee: ["fee", "commission", "trading_fee"],
+    },
+  },
+  Bybit: {
+    columns: {
+      transactionId: ["exec_id", "trade_id", "order_id", "id"],
+      timestamp: ["exec_time", "trade_time", "time", "timestamp", "created_time"],
+      symbol: ["symbol", "pair", "market", "trading_pair"],
+      side: ["side", "direction", "trade_type", "type"],
+      price: ["exec_price", "price", "avg_price", "order_price"],
+      amount: ["exec_qty", "qty", "size", "executed_qty", "quantity", "filled"],
+      fee: ["exec_fee", "fee", "trading_fee", "commission"],
+    },
+  },
 };
-
-const requiredKeys = ["timestamp", "side", "price", "amount"];
 
 const dom = {
   files: document.getElementById("csvFiles"),
@@ -35,7 +48,7 @@ dom.downloadBtn.addEventListener("click", handleDownload);
 async function handleProcess() {
   const files = Array.from(dom.files.files || []);
   if (!files.length) {
-    setStatus("Select one or more CSV files first.");
+    setStatus("Select Binance/Bybit CSV file(s) first.");
     return;
   }
 
@@ -47,30 +60,35 @@ async function handleProcess() {
 
     for (const file of files) {
       const exchange = guessExchange(file.name);
+      if (!EXCHANGE_PARSERS[exchange]) {
+        throw new Error(`Unsupported exchange file: ${file.name}. Only Binance and Bybit are supported in this step.`);
+      }
+
       const text = await file.text();
-      const parsed = parseCsv(text);
-      if (!parsed.length) {
+      const parsedRows = parseCsv(text);
+      if (!parsedRows.length) {
         continue;
       }
 
-      const normalized = normalizeRows(parsed, exchange, file.name);
+      const normalized = normalizeRowsForExchange(parsedRows, exchange, file.name);
       allRows.push(...normalized);
     }
 
     if (!allRows.length) {
-      throw new Error("No valid transaction rows were found in the uploaded files.");
+      throw new Error("No valid Binance/Bybit transaction rows were found.");
     }
 
     allRows.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-    const pnlRecords = calculateFifoPnl(allRows);
-    const summary = buildSummary(allRows, pnlRecords);
-    const packageFiles = await buildEvidencePackage(allRows, pnlRecords, summary);
+    const fifoResult = calculateFifoPnl(allRows);
+    const summary = buildSummary(allRows, fifoResult.records, fifoResult.warnings);
+    const packageFiles = await buildEvidencePackage(allRows, fifoResult.records, summary);
 
     state.transactions = allRows;
-    state.pnlRecords = pnlRecords;
+    state.pnlRecords = fifoResult.records;
     state.summary = summary;
     state.packageFiles = packageFiles;
+    state.warnings = fifoResult.warnings;
 
     renderSummary(summary);
     renderLedgerPreview(allRows);
@@ -78,7 +96,11 @@ async function handleProcess() {
     dom.downloadBtn.disabled = false;
     dom.statsCard.hidden = false;
     dom.previewCard.hidden = false;
-    setStatus(`Processed ${allRows.length} transactions from ${files.length} file(s).`);
+
+    const warningText = fifoResult.warnings.length
+      ? ` Warning: ${fifoResult.warnings.length} unmatched sell event(s).`
+      : "";
+    setStatus(`Processed ${allRows.length} transactions from ${files.length} file(s).${warningText}`);
   } catch (error) {
     setStatus(`Processing failed: ${error.message}`);
     console.error(error);
@@ -106,8 +128,6 @@ function guessExchange(fileName = "") {
   const lower = fileName.toLowerCase();
   if (lower.includes("binance")) return "Binance";
   if (lower.includes("bybit")) return "Bybit";
-  if (lower.includes("upbit")) return "Upbit";
-  if (lower.includes("bithumb")) return "Bithumb";
   return "Unknown";
 }
 
@@ -174,75 +194,89 @@ function parseCsv(text) {
   });
 }
 
-function normalizeRows(parsedRows, exchange, sourceName) {
-  const mappedKeys = {};
-  const first = parsedRows[0] || {};
+function normalizeRowsForExchange(parsedRows, exchange, sourceName) {
+  const config = EXCHANGE_PARSERS[exchange];
+  const sample = parsedRows[0] || {};
 
-  for (const key of Object.keys(aliasMap)) {
-    const aliases = aliasMap[key];
-    mappedKeys[key] = findMappedHeader(first, aliases);
-  }
+  const columns = {
+    transactionId: findColumn(sample, config.columns.transactionId),
+    timestamp: findColumn(sample, config.columns.timestamp),
+    symbol: findColumn(sample, config.columns.symbol),
+    side: findColumn(sample, config.columns.side),
+    price: findColumn(sample, config.columns.price),
+    amount: findColumn(sample, config.columns.amount),
+    fee: findColumn(sample, config.columns.fee),
+  };
 
-  for (const key of requiredKeys) {
-    if (!mappedKeys[key]) {
-      throw new Error(`Missing required column for ${key} in file: ${sourceName}`);
+  const required = ["timestamp", "symbol", "side", "price", "amount"];
+  for (const key of required) {
+    if (!columns[key]) {
+      throw new Error(`${exchange} CSV is missing required column for '${key}' in ${sourceName}`);
     }
   }
 
   return parsedRows
-    .map((row, idx) => {
-      const symbol = row[mappedKeys.symbol] || "";
-      const [baseAsset, quoteAsset] = extractPair(
-        symbol,
-        row[mappedKeys.base_asset],
-        row[mappedKeys.quote_asset]
-      );
+    .map((row, index) => {
+      const parsedSide = normalizeSide(row[columns.side]);
+      if (!parsedSide) {
+        return null;
+      }
 
-      const sideRaw = (row[mappedKeys.side] || "").toUpperCase();
-      const side = sideRaw.includes("SELL") ? "SELL" : "BUY";
+      const [baseAsset, quoteAsset] = extractPair(row[columns.symbol]);
+      const timestamp = normalizeDate(row[columns.timestamp]);
+      const price = toNumber(row[columns.price]);
+      const amount = toNumber(row[columns.amount]);
+      const fee = columns.fee ? toNumber(row[columns.fee]) : 0;
 
-      const transaction = {
-        transaction_id: `${exchange}-${sourceName}-${idx + 1}`,
+      if (!baseAsset || !quoteAsset) {
+        return null;
+      }
+      if (!Number.isFinite(price) || !Number.isFinite(amount) || amount <= 0) {
+        return null;
+      }
+
+      const externalId = columns.transactionId ? row[columns.transactionId] : "";
+
+      return {
+        transaction_id: externalId || `${exchange}-${sourceName}-${index + 1}`,
         user_id: "demo-user",
         exchange,
-        timestamp: normalizeDate(row[mappedKeys.timestamp]),
+        timestamp,
         base_asset: baseAsset,
         quote_asset: quoteAsset,
-        side,
-        price: toNumber(row[mappedKeys.price]),
-        amount: toNumber(row[mappedKeys.amount]),
-        fee: toNumber(row[mappedKeys.fee] || "0"),
+        side: parsedSide,
+        price,
+        amount,
+        fee: Number.isFinite(fee) ? fee : 0,
       };
-
-      if (!Number.isFinite(transaction.price) || !Number.isFinite(transaction.amount)) {
-        return null;
-      }
-      if (!transaction.base_asset || !transaction.quote_asset) {
-        return null;
-      }
-
-      return transaction;
     })
     .filter(Boolean);
 }
 
-function findMappedHeader(sampleRow, aliases) {
+function findColumn(sampleRow, aliases) {
   const keys = Object.keys(sampleRow);
   for (const key of keys) {
-    const normalized = normalizeHeader(key);
-    if (aliases.includes(normalized)) {
+    if (aliases.includes(key)) {
       return key;
     }
   }
   return "";
 }
 
-function normalizeHeader(header) {
-  return String(header || "")
+function normalizeHeader(value) {
+  return String(value || "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_")
-    .replace(/[()\-]/g, "_");
+    .replace(/[()\-]/g, "_")
+    .replace(/[\/]/g, "_");
+}
+
+function normalizeSide(value) {
+  const side = String(value || "").trim().toUpperCase();
+  if (side.includes("BUY")) return "BUY";
+  if (side.includes("SELL")) return "SELL";
+  return "";
 }
 
 function normalizeDate(value) {
@@ -262,24 +296,19 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-function extractPair(symbol, baseAsset, quoteAsset) {
-  if (baseAsset && quoteAsset) {
-    return [String(baseAsset).toUpperCase(), String(quoteAsset).toUpperCase()];
-  }
-
+function extractPair(symbol) {
   const normalized = String(symbol || "")
     .toUpperCase()
-    .replace("-", "/")
-    .replace("_", "/")
-    .replace(" ", "");
+    .replace(/\s+/g, "")
+    .replace(/[-_]/g, "/");
 
   if (normalized.includes("/")) {
     const [base, quote] = normalized.split("/");
     return [base || "", quote || ""];
   }
 
-  const knownQuote = ["USDT", "USDC", "USD", "KRW", "BTC", "ETH"];
-  for (const quote of knownQuote) {
+  const knownQuotes = ["USDT", "USDC", "USD", "BUSD", "KRW", "BTC", "ETH"];
+  for (const quote of knownQuotes) {
     if (normalized.endsWith(quote) && normalized.length > quote.length) {
       return [normalized.slice(0, -quote.length), quote];
     }
@@ -290,54 +319,70 @@ function extractPair(symbol, baseAsset, quoteAsset) {
 
 function calculateFifoPnl(transactions) {
   const inventory = new Map();
-  const pnlRecords = [];
+  const records = [];
+  const warnings = [];
 
   for (const tx of transactions) {
-    const key = `${tx.base_asset}/${tx.quote_asset}`;
-
-    if (!inventory.has(key)) {
-      inventory.set(key, []);
+    const pair = `${tx.base_asset}/${tx.quote_asset}`;
+    if (!inventory.has(pair)) {
+      inventory.set(pair, []);
     }
 
+    const lots = inventory.get(pair);
+
     if (tx.side === "BUY") {
-      inventory.get(key).push({
-        remaining: tx.amount,
-        price: tx.price,
+      const unitCost = (tx.price * tx.amount + tx.fee) / tx.amount;
+      lots.push({
+        transaction_id: tx.transaction_id,
         timestamp: tx.timestamp,
+        remaining: tx.amount,
+        unitCost,
       });
       continue;
     }
 
     let sellRemaining = tx.amount;
-    const lots = inventory.get(key);
+    const sellUnitProceeds = (tx.price * tx.amount - tx.fee) / tx.amount;
 
-    while (sellRemaining > 0 && lots.length) {
-      const firstLot = lots[0];
-      const matchedAmount = Math.min(sellRemaining, firstLot.remaining);
-      const profit = (tx.price - firstLot.price) * matchedAmount;
+    while (sellRemaining > 0 && lots.length > 0) {
+      const buyLot = lots[0];
+      const matchedQty = Math.min(sellRemaining, buyLot.remaining);
+      const costBasis = matchedQty * buyLot.unitCost;
+      const proceeds = matchedQty * sellUnitProceeds;
+      const profit = proceeds - costBasis;
 
-      pnlRecords.push({
-        asset: key,
-        buy_price: firstLot.price,
-        sell_price: tx.price,
-        quantity: matchedAmount,
-        profit,
+      records.push({
+        asset: pair,
+        buy_tx_id: buyLot.transaction_id,
+        sell_tx_id: tx.transaction_id,
+        buy_price: round(buyLot.unitCost),
+        sell_price: round(sellUnitProceeds),
+        quantity: round(matchedQty),
+        cost_basis: round(costBasis),
+        proceeds: round(proceeds),
+        profit: round(profit),
         timestamp: tx.timestamp,
       });
 
-      firstLot.remaining -= matchedAmount;
-      sellRemaining -= matchedAmount;
+      buyLot.remaining -= matchedQty;
+      sellRemaining -= matchedQty;
 
-      if (firstLot.remaining <= 0) {
+      if (buyLot.remaining <= 0) {
         lots.shift();
       }
     }
+
+    if (sellRemaining > 0) {
+      warnings.push(
+        `Unmatched SELL quantity ${round(sellRemaining)} ${tx.base_asset} on ${tx.timestamp} (${tx.exchange}).`
+      );
+    }
   }
 
-  return pnlRecords;
+  return { records, warnings };
 }
 
-function buildSummary(transactions, pnlRecords) {
+function buildSummary(transactions, pnlRecords, warnings) {
   const totalProfit = pnlRecords
     .filter((r) => r.profit > 0)
     .reduce((acc, r) => acc + r.profit, 0);
@@ -346,14 +391,13 @@ function buildSummary(transactions, pnlRecords) {
     .filter((r) => r.profit < 0)
     .reduce((acc, r) => acc + Math.abs(r.profit), 0);
 
-  const netProfit = totalProfit - totalLoss;
-
   return {
     totalTrades: transactions.length,
     totalPnlRows: pnlRecords.length,
-    totalProfit,
-    totalLoss,
-    netProfit,
+    unmatchedSells: warnings.length,
+    totalProfit: round(totalProfit),
+    totalLoss: round(totalLoss),
+    netProfit: round(totalProfit - totalLoss),
   };
 }
 
@@ -361,6 +405,7 @@ function renderSummary(summary) {
   const items = [
     ["Total Trades", summary.totalTrades],
     ["PnL Records", summary.totalPnlRows],
+    ["Unmatched Sells", summary.unmatchedSells],
     ["Total Profit", formatMoney(summary.totalProfit)],
     ["Total Loss", formatMoney(summary.totalLoss)],
     ["Net Profit", formatMoney(summary.netProfit)],
@@ -392,9 +437,7 @@ async function buildEvidencePackage(transactions, pnlRecords, summary) {
   zip.file("transactions.csv", toCsv(transactions));
   zip.file("profit_loss.csv", toCsv(pnlRecords));
   zip.file("income_report.csv", buildIncomeCsv(summary));
-
-  const pdfBytes = buildPdfSummary(summary);
-  zip.file("tax_summary.pdf", pdfBytes);
+  zip.file("tax_summary.pdf", buildPdfSummary(summary));
 
   return zip.generateAsync({ type: "blob" });
 }
@@ -420,7 +463,7 @@ function escapeCsv(value) {
 function buildIncomeCsv(summary) {
   const lines = [
     "income_type,amount",
-    `trading_profit,${round(summary.netProfit)}`,
+    `trading_profit,${summary.netProfit}`,
     "staking_income,0",
     "airdrop_income,0",
   ];
@@ -436,10 +479,12 @@ function buildPdfSummary(summary) {
 
   doc.setFontSize(11);
   doc.text(`Total Trades: ${summary.totalTrades}`, 14, 34);
-  doc.text(`Total Profit: ${formatMoney(summary.totalProfit)}`, 14, 42);
-  doc.text(`Total Loss: ${formatMoney(summary.totalLoss)}`, 14, 50);
-  doc.text(`Net Profit: ${formatMoney(summary.netProfit)}`, 14, 58);
-  doc.text(`Generated At (UTC): ${new Date().toISOString()}`, 14, 70);
+  doc.text(`PnL Rows: ${summary.totalPnlRows}`, 14, 42);
+  doc.text(`Unmatched Sells: ${summary.unmatchedSells}`, 14, 50);
+  doc.text(`Total Profit: ${formatMoney(summary.totalProfit)}`, 14, 58);
+  doc.text(`Total Loss: ${formatMoney(summary.totalLoss)}`, 14, 66);
+  doc.text(`Net Profit: ${formatMoney(summary.netProfit)}`, 14, 74);
+  doc.text(`Generated At (UTC): ${new Date().toISOString()}`, 14, 86);
 
   return doc.output("arraybuffer");
 }
@@ -453,5 +498,5 @@ function formatMoney(num) {
 }
 
 function round(value) {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
+  return Math.round((value + Number.EPSILON) * 100000000) / 100000000;
 }
