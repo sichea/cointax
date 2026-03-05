@@ -3,12 +3,56 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hello World</title>
-  <link href='/style.css' rel='stylesheet'>
+  <title>Crypto Tax Evidence Generator (MVP)</title>
+  <link href="/style.css" rel="stylesheet" />
 </head>
 <body>
-  <h1>Hello, world!</h1>
-  <button onclick="console.log('hello');">Press me</button>
-  <script defer type="text/javascript" src="/main.js"></script>
+  <main class="app-shell">
+    <header class="hero">
+      <p class="eyebrow">Crypto Tax Evidence Generator</p>
+      <h1>MVP Workflow</h1>
+      <p class="subtitle">Upload CSV files from exchanges, normalize transactions, run FIFO PnL, and export accountant-ready evidence in one zip.</p>
+    </header>
+
+    <section class="card">
+      <h2>1. Upload CSV</h2>
+      <p class="muted">Supported format style: Binance, Bybit, Upbit, Bithumb (auto column mapping by header aliases).</p>
+      <div class="upload-row">
+        <input id="csvFiles" type="file" accept=".csv,text/csv" multiple />
+        <button id="processBtn" type="button">Process Files</button>
+      </div>
+      <p id="status" class="status">No files processed yet.</p>
+    </section>
+
+    <section class="card stats" id="statsCard" hidden>
+      <h2>2. Calculation Summary</h2>
+      <div class="stats-grid" id="statsGrid"></div>
+      <button id="downloadBtn" type="button" disabled>Download crypto_tax_package.zip</button>
+    </section>
+
+    <section class="card" id="previewCard" hidden>
+      <h2>3. Ledger Preview</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>timestamp</th>
+              <th>exchange</th>
+              <th>pair</th>
+              <th>side</th>
+              <th>price</th>
+              <th>amount</th>
+              <th>fee</th>
+            </tr>
+          </thead>
+          <tbody id="ledgerPreview"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script defer src="/main.js"></script>
 </body>
 </html>
