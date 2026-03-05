@@ -48,11 +48,11 @@ dom.downloadBtn.addEventListener("click", handleDownload);
 async function handleProcess() {
   const files = Array.from(dom.files.files || []);
   if (!files.length) {
-    setStatus("Select Binance/Bybit CSV file(s) first.");
+    setStatus("Binance/Bybit CSV 파일을 먼저 선택하세요.");
     return;
   }
 
-  setStatus("Parsing CSV files...");
+  setStatus("CSV 파일을 분석 중입니다...");
   dom.downloadBtn.disabled = true;
 
   try {
@@ -61,7 +61,7 @@ async function handleProcess() {
     for (const file of files) {
       const exchange = guessExchange(file.name);
       if (!EXCHANGE_PARSERS[exchange]) {
-        throw new Error(`Unsupported exchange file: ${file.name}. Only Binance and Bybit are supported in this step.`);
+        throw new Error(`지원하지 않는 거래소 파일입니다: ${file.name}. 현재는 Binance, Bybit만 지원합니다.`);
       }
 
       const text = await file.text();
@@ -75,7 +75,7 @@ async function handleProcess() {
     }
 
     if (!allRows.length) {
-      throw new Error("No valid Binance/Bybit transaction rows were found.");
+      throw new Error("유효한 Binance/Bybit 거래 내역을 찾지 못했습니다.");
     }
 
     allRows.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -98,11 +98,11 @@ async function handleProcess() {
     dom.previewCard.hidden = false;
 
     const warningText = fifoResult.warnings.length
-      ? ` Warning: ${fifoResult.warnings.length} unmatched sell event(s).`
+      ? ` 경고: 매수 매칭이 안 된 매도 ${fifoResult.warnings.length}건이 있습니다.`
       : "";
-    setStatus(`Processed ${allRows.length} transactions from ${files.length} file(s).${warningText}`);
+    setStatus(`${files.length}개 파일에서 총 ${allRows.length}건 거래를 처리했습니다.${warningText}`);
   } catch (error) {
-    setStatus(`Processing failed: ${error.message}`);
+    setStatus(`처리에 실패했습니다: ${error.message}`);
     console.error(error);
   }
 }
@@ -211,7 +211,7 @@ function normalizeRowsForExchange(parsedRows, exchange, sourceName) {
   const required = ["timestamp", "symbol", "side", "price", "amount"];
   for (const key of required) {
     if (!columns[key]) {
-      throw new Error(`${exchange} CSV is missing required column for '${key}' in ${sourceName}`);
+      throw new Error(`${exchange} CSV(${sourceName})에서 필수 컬럼 '${key}'을(를) 찾을 수 없습니다.`);
     }
   }
 
@@ -374,7 +374,7 @@ function calculateFifoPnl(transactions) {
 
     if (sellRemaining > 0) {
       warnings.push(
-        `Unmatched SELL quantity ${round(sellRemaining)} ${tx.base_asset} on ${tx.timestamp} (${tx.exchange}).`
+        `${tx.timestamp} (${tx.exchange})에 ${tx.base_asset} 매도 ${round(sellRemaining)} 수량이 매수 내역과 매칭되지 않았습니다.`
       );
     }
   }
@@ -403,12 +403,12 @@ function buildSummary(transactions, pnlRecords, warnings) {
 
 function renderSummary(summary) {
   const items = [
-    ["Total Trades", summary.totalTrades],
-    ["PnL Records", summary.totalPnlRows],
-    ["Unmatched Sells", summary.unmatchedSells],
-    ["Total Profit", formatMoney(summary.totalProfit)],
-    ["Total Loss", formatMoney(summary.totalLoss)],
-    ["Net Profit", formatMoney(summary.netProfit)],
+    ["총 거래 건수", summary.totalTrades],
+    ["손익 레코드", summary.totalPnlRows],
+    ["미매칭 매도", summary.unmatchedSells],
+    ["총 이익", formatMoney(summary.totalProfit)],
+    ["총 손실", formatMoney(summary.totalLoss)],
+    ["순이익", formatMoney(summary.netProfit)],
   ];
 
   dom.statsGrid.innerHTML = items
@@ -475,16 +475,16 @@ function buildPdfSummary(summary) {
   const doc = new jsPDF();
 
   doc.setFontSize(16);
-  doc.text("Crypto Tax Summary", 14, 20);
+  doc.text("코인 세금 요약", 14, 20);
 
   doc.setFontSize(11);
-  doc.text(`Total Trades: ${summary.totalTrades}`, 14, 34);
-  doc.text(`PnL Rows: ${summary.totalPnlRows}`, 14, 42);
-  doc.text(`Unmatched Sells: ${summary.unmatchedSells}`, 14, 50);
-  doc.text(`Total Profit: ${formatMoney(summary.totalProfit)}`, 14, 58);
-  doc.text(`Total Loss: ${formatMoney(summary.totalLoss)}`, 14, 66);
-  doc.text(`Net Profit: ${formatMoney(summary.netProfit)}`, 14, 74);
-  doc.text(`Generated At (UTC): ${new Date().toISOString()}`, 14, 86);
+  doc.text(`총 거래 건수: ${summary.totalTrades}`, 14, 34);
+  doc.text(`손익 레코드: ${summary.totalPnlRows}`, 14, 42);
+  doc.text(`미매칭 매도: ${summary.unmatchedSells}`, 14, 50);
+  doc.text(`총 이익: ${formatMoney(summary.totalProfit)}`, 14, 58);
+  doc.text(`총 손실: ${formatMoney(summary.totalLoss)}`, 14, 66);
+  doc.text(`순이익: ${formatMoney(summary.netProfit)}`, 14, 74);
+  doc.text(`생성 시각(UTC): ${new Date().toISOString()}`, 14, 86);
 
   return doc.output("arraybuffer");
 }
