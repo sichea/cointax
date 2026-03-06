@@ -23,6 +23,7 @@ const OUTPUT_FILES = [
 ];
 
 const DEFAULT_USDT_KRW = 1300;
+const THEME_STORAGE_KEY = "tax-evidence-theme";
 const USD_STABLE_ASSETS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP", "USD1", "DAI"]);
 
 const state = {
@@ -63,6 +64,7 @@ const dom = {
   files: document.getElementById("csvFiles"),
   processBtn: document.getElementById("processBtn"),
   downloadBtn: document.getElementById("downloadBtn"),
+  themeToggle: document.getElementById("themeToggle"),
   status: document.getElementById("status"),
   statsCard: document.getElementById("statsCard"),
   statsGrid: document.getElementById("statsGrid"),
@@ -70,8 +72,37 @@ const dom = {
   ledgerPreview: document.getElementById("ledgerPreview"),
 };
 
+initTheme();
 dom.processBtn.addEventListener("click", handleProcess);
 dom.downloadBtn.addEventListener("click", handleDownload);
+if (dom.themeToggle) {
+  dom.themeToggle.addEventListener("click", toggleTheme);
+}
+
+function initTheme() {
+  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === "dark" || savedTheme === "light") {
+    setTheme(savedTheme);
+    return;
+  }
+
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  setTheme(prefersDark ? "dark" : "light");
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  setTheme(current === "dark" ? "light" : "dark");
+}
+
+function setTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem(THEME_STORAGE_KEY, theme);
+
+  if (dom.themeToggle) {
+    dom.themeToggle.textContent = theme === "dark" ? "라이트모드" : "다크모드";
+  }
+}
 
 async function handleProcess() {
   const files = Array.from(dom.files.files || []);
