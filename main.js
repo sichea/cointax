@@ -10,12 +10,16 @@ const EXCHANGE_PARSERS = {
   Binance: {
     columns: {
       transactionId: ["id", "trade_id", "order_id"],
-      timestamp: ["date_utc", "time", "timestamp", "date", "create_time"],
-      symbol: ["pair", "symbol", "market", "trading_pair"],
+      timestamp: ["Date(UTC)", "date(utc)", "date_utc", "time", "timestamp", "date", "create_time"],
+      symbol: ["Pair", "pair", "symbol", "market", "trading_pair"],
+      baseAsset: ["Base Asset", "base asset", "base_asset", "base"],
+      quoteAsset: ["Quote Asset", "quote asset", "quote_asset", "quote"],
       side: ["side", "type", "direction"],
       price: ["price", "avg_price", "executed_price"],
       amount: ["amount", "executed", "filled", "executed_qty", "quantity", "qty"],
+      total: ["total", "value", "filled_value"],
       fee: ["fee", "commission", "trading_fee"],
+      feeAsset: ["Fee Coin", "fee coin", "fee_asset", "commission_asset"],
     },
   },
   Bybit: {
@@ -26,7 +30,9 @@ const EXCHANGE_PARSERS = {
       side: ["side", "direction", "trade_type", "type"],
       price: ["exec_price", "price", "avg_price", "order_price"],
       amount: ["exec_qty", "qty", "size", "executed_qty", "quantity", "filled"],
+      total: ["total", "value", "filled_value"],
       fee: ["exec_fee", "fee", "trading_fee", "commission"],
+      feeAsset: ["fee_coin", "fee coin", "fee_asset", "commission_asset"],
     },
   },
 };
@@ -65,12 +71,12 @@ async function handleProcess() {
       }
 
       const text = await file.text();
-      const parsedRows = parseCsv(text);
-      if (!parsedRows.length) {
+      const parsed = parseCsv(text);
+      if (!parsed.rows.length) {
         continue;
       }
 
-      const normalized = normalizeRowsForExchange(parsedRows, exchange, file.name);
+      const normalized = normalizeRowsForExchange(parsed.rows, exchange, file.name, parsed.headers);
       allRows.push(...normalized);
     }
 
@@ -181,63 +187,58 @@ function parseCsv(text) {
   }
 
   if (rows.length < 2) {
-    return [];
+    return { headers: [], rows: [] };
   }
 
   const headers = rows[0].map((h) => normalizeHeader(h));
-  return rows.slice(1).map((cells) => {
+  const mappedRows = rows.slice(1).map((cells) => {
     const obj = {};
     for (let i = 0; i < headers.length; i += 1) {
       obj[headers[i]] = cells[i] || "";
     }
     return obj;
   });
+  return { headers, rows: mappedRows };
 }
 
-function normalizeRowsForExchange(parsedRows, exchange, sourceName) {
+function normalizeRowsForExchange(parsedRows, exchange, sourceName, detectedHeaders = []) {
   const config = EXCHANGE_PARSERS[exchange];
   const sample = parsedRows[0] || {};
+  const detected = detectedHeaders.length ? detectedHeaders : Object.keys(sample);
 
   const columns = {
     transactionId: findColumn(sample, config.columns.transactionId),
     timestamp: findColumn(sample, config.columns.timestamp),
     symbol: findColumn(sample, config.columns.symbol),
+    baseAsset: findColumn(sample, config.columns.baseAsset || []),
+    quoteAsset: findColumn(sample, config.columns.quoteAsset || []),
     side: findColumn(sample, config.columns.side),
     price: findColumn(sample, config.columns.price),
     amount: findColumn(sample, config.columns.amount),
+    total: findColumn(sample, config.columns.total || []),
     fee: findColumn(sample, config.columns.fee),
+    feeAsset: findColumn(sample, config.columns.feeAsset || []),
   };
-
-  const required = ["timestamp", "symbol", "side", "price", "amount"];
-  for (const key of required) {
-    if (!columns[key]) {
-      throw new Error(`${exchange} CSV(${sourceName})에서 필수 컬럼 '${key}'을(를) 찾을 수 없습니다.`);
-    }
-  }
-
-  return parsedRows
+  const normalizedRows = parsedRows
     .map((row, index) => {
-      const parsedSide = normalizeSide(row[columns.side]);
-      if (!parsedSide) {
-        return null;
-      }
+      const parsedSide = columns.side ? normalizeSide(row[columns.side]) : "";
+      const pairValue = columns.symbol ? row[columns.symbol] : "";
+      const explicitBase = columns.baseAsset ? String(row[columns.baseAsset] || "").trim().toUpperCase() : "";
+      const explicitQuote = columns.quoteAsset ? String(row[columns.quoteAsset] || "").trim().toUpperCase() : "";
+      const [pairBase, pairQuote] = extractPair(pairValue);
+      const baseAsset = explicitBase || pairBase;
+      const quoteAsset = explicitQuote || pairQuote;
 
-      const [baseAsset, quoteAsset] = extractPair(row[columns.symbol]);
-      const timestamp = normalizeDate(row[columns.timestamp]);
-      const price = toNumber(row[columns.price]);
-      const amount = toNumber(row[columns.amount]);
+      const timestamp = columns.timestamp ? normalizeDate(row[columns.timestamp]) : "";
+      const price = columns.price ? toNumber(row[columns.price]) : NaN;
+      const amount = columns.amount ? toNumber(row[columns.amount]) : NaN;
+      const totalRaw = columns.total ? toNumber(row[columns.total]) : NaN;
+      const total = Number.isFinite(totalRaw) ? totalRaw : price * amount;
       const fee = columns.fee ? toNumber(row[columns.fee]) : 0;
-
-      if (!baseAsset || !quoteAsset) {
-        return null;
-      }
-      if (!Number.isFinite(price) || !Number.isFinite(amount) || amount <= 0) {
-        return null;
-      }
-
+      const feeAsset = columns.feeAsset ? String(row[columns.feeAsset] || "").trim().toUpperCase() : "";
       const externalId = columns.transactionId ? row[columns.transactionId] : "";
 
-      return {
+      const normalizedTx = {
         transaction_id: externalId || `${exchange}-${sourceName}-${index + 1}`,
         user_id: "demo-user",
         exchange,
@@ -247,16 +248,46 @@ function normalizeRowsForExchange(parsedRows, exchange, sourceName) {
         side: parsedSide,
         price,
         amount,
+        total,
         fee: Number.isFinite(fee) ? fee : 0,
+        fee_asset: feeAsset,
       };
+
+      if (!isValidNormalizedTransaction(normalizedTx)) {
+        return null;
+      }
+      return normalizedTx;
     })
     .filter(Boolean);
+
+  if (!normalizedRows.length && parsedRows.length) {
+    const detectedText = detected.length ? detected.join(", ") : "(none)";
+    throw new Error(
+      `${exchange} CSV(${sourceName})를 정규 스키마로 매핑하지 못했습니다. 감지된 헤더: ${detectedText}`
+    );
+  }
+
+  return normalizedRows;
+}
+
+function isValidNormalizedTransaction(tx) {
+  if (!tx.timestamp || !tx.base_asset || !tx.quote_asset || !tx.side) {
+    return false;
+  }
+  if (!Number.isFinite(tx.price) || !Number.isFinite(tx.amount) || !Number.isFinite(tx.total)) {
+    return false;
+  }
+  if (tx.amount <= 0) {
+    return false;
+  }
+  return true;
 }
 
 function findColumn(sampleRow, aliases) {
   const keys = Object.keys(sampleRow);
+  const aliasSet = new Set((aliases || []).map((alias) => normalizeHeader(alias)));
   for (const key of keys) {
-    if (aliases.includes(key)) {
+    if (aliasSet.has(normalizeHeader(key))) {
       return key;
     }
   }
@@ -267,9 +298,8 @@ function normalizeHeader(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, "_")
-    .replace(/[()\-]/g, "_")
-    .replace(/[\/]/g, "_");
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
 function normalizeSide(value) {
