@@ -1,33 +1,31 @@
 export const DEFAULT_USDT_KRW = 1300;
-export const FX_SOURCE = "MVP_FIXED_USDT_KRW";
+export const FX_RATE_SOURCE = "MVP_FIXED_USDT_KRW";
 
 export function getUsdtKrwAt() {
   return DEFAULT_USDT_KRW;
 }
 
-export function buildFxRates(events) {
+export function buildFxRatesForExport(unifiedTransactions) {
   const byTimestamp = new Map();
 
-  for (const event of events) {
-    const timestamp = event.timestamp;
-    if (!timestamp) continue;
-
-    if (!byTimestamp.has(timestamp)) {
-      byTimestamp.set(timestamp, {
-        timestamp,
-        usdt_krw: round(getUsdtKrwAt(timestamp)),
+  for (const tx of unifiedTransactions) {
+    if (!tx.timestamp) continue;
+    if (!byTimestamp.has(tx.timestamp)) {
+      byTimestamp.set(tx.timestamp, {
+        timestamp: tx.timestamp,
+        usdt_krw: round(tx.fx_rate_usdt_krw),
         btc_krw: "",
         eth_krw: "",
-        source: FX_SOURCE,
+        source: tx.pricing_source || FX_RATE_SOURCE,
       });
     }
 
-    const row = byTimestamp.get(timestamp);
-    if (event.base_asset === "BTC" && Number.isFinite(event.price_krw)) {
-      row.btc_krw = round(event.price_krw);
+    const row = byTimestamp.get(tx.timestamp);
+    if (tx.asset_in === "BTC" && Number.isFinite(tx.price_krw)) {
+      row.btc_krw = round(tx.price_krw);
     }
-    if (event.base_asset === "ETH" && Number.isFinite(event.price_krw)) {
-      row.eth_krw = round(event.price_krw);
+    if (tx.asset_in === "ETH" && Number.isFinite(tx.price_krw)) {
+      row.eth_krw = round(tx.price_krw);
     }
   }
 

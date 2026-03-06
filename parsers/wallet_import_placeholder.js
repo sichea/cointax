@@ -28,8 +28,8 @@ export function collectWalletImportRequests({ evmAddress, solanaAddress }) {
   return requests;
 }
 
-export function parseWalletImportsPlaceholder(walletImportRequests) {
-  void walletImportRequests;
-  // Placeholder: future on-chain fetch + parsing.
+export function parseWalletImportPlaceholder(requests) {
+  void requests;
+  // Placeholder for future on-chain parser output in unified schema.
   return [];
 }

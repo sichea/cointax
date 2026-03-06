@@ -1,36 +1,39 @@
-import { calculateFifoRealizedPnl } from "./calculators/fifo_calculator.js";
-import { buildEvidenceZip, OUTPUT_FILES } from "./exports/zip_exporter.js";
+import { buildZipEvidencePackage, OUTPUT_FILES } from "./exports/zip_package_exporter.js";
 import { matchTransfers } from "./matchers/transfer_matcher.js";
-import { normalizeTransactions } from "./normalizers/transaction_normalizer.js";
-import { canParseBinanceSpot, parseBinanceSpotRows } from "./parsers/binance_spot_parser.js";
-import { canParseBinanceTransaction, parseBinanceTransactionRows } from "./parsers/binance_transaction_parser.js";
+import { canParseBinanceSpotTrade, parseBinanceSpotTradeRows } from "./parsers/binance_spot_trade_parser.js";
+import {
+  canParseBinanceTransactionHistory,
+  parseBinanceTransactionHistoryRows,
+} from "./parsers/binance_transaction_history_parser.js";
 import { canParseBybit, parseBybitRows } from "./parsers/bybit_parser.js";
-import { collectWalletImportRequests, parseWalletImportsPlaceholder } from "./parsers/wallet_import_placeholder.js";
-import { buildFxRates } from "./pricing/fx_rate_service.js";
+import { collectWalletImportRequests, parseWalletImportPlaceholder } from "./parsers/wallet_import_placeholder.js";
+import { buildFxRatesForExport } from "./pricing/fx_rate_service.js";
+import { calculateRealizedProfit } from "./calculators/realized_profit_calculator.js";
 import { buildTaxSummary } from "./reports/tax_summary_report.js";
+import { clearUnifiedTransactions, insertUnifiedTransactions, listUnifiedTransactions } from "./db/unified_transactions_table.js";
+import { clearRealizedProfitLots, insertRealizedProfitLots, listRealizedProfitLots } from "./db/realized_profit_lots_table.js";
 
 const THEME_STORAGE_KEY = "tax-evidence-theme";
 
 const state = {
-  events: [],
-  tradeProfitRecords: [],
+  unifiedTransactions: [],
+  realizedLots: [],
   summary: null,
   packageFiles: null,
   warnings: [],
   processing: null,
-  walletImportRequests: [],
 };
 
 const PARSER_REGISTRY = [
   {
-    id: "binance_spot_parser",
-    canParse: canParseBinanceSpot,
-    parseRows: parseBinanceSpotRows,
+    id: "binance_spot_trade_parser",
+    canParse: canParseBinanceSpotTrade,
+    parseRows: parseBinanceSpotTradeRows,
   },
   {
-    id: "binance_transaction_parser",
-    canParse: canParseBinanceTransaction,
-    parseRows: parseBinanceTransactionRows,
+    id: "binance_transaction_history_parser",
+    canParse: canParseBinanceTransactionHistory,
+    parseRows: parseBinanceTransactionHistoryRows,
   },
   {
     id: "bybit_parser",
@@ -79,7 +82,6 @@ function toggleTheme() {
 function setTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem(THEME_STORAGE_KEY, theme);
-
   if (dom.themeToggle) {
     dom.themeToggle.textContent = theme === "dark" ? "라이트모드" : "다크모드";
   }
@@ -87,19 +89,18 @@ function setTheme(theme) {
 
 async function handleProcess() {
   const files = Array.from(dom.files.files || []);
-  const walletImportRequests = collectWalletImportRequests({
+  const walletRequests = collectWalletImportRequests({
     evmAddress: dom.evmWalletAddress?.value,
     solanaAddress: dom.solanaWalletAddress?.value,
   });
-  state.walletImportRequests = walletImportRequests;
 
-  if (!files.length && !walletImportRequests.length) {
-    setStatus("Binance Spot Trade History CSV 파일 또는 지갑 주소를 입력하세요.");
+  if (!files.length && !walletRequests.length) {
+    setStatus("CSV 파일 또는 지갑 주소를 입력하세요.");
     return;
   }
 
-  if (!files.length && walletImportRequests.length) {
-    setStatus("지갑 온체인 가져오기는 준비 중입니다. 현재는 Binance Spot Trade History CSV를 함께 업로드해 주세요.");
+  if (!files.length && walletRequests.length) {
+    setStatus("지갑 온체인 가져오기는 준비 중입니다. 현재 Binance Spot Trade CSV를 함께 업로드해 주세요.");
     return;
   }
 
@@ -107,74 +108,72 @@ async function handleProcess() {
   dom.downloadBtn.disabled = true;
 
   try {
-    const rawRecords = [];
+    clearUnifiedTransactions();
+    clearRealizedProfitLots();
+
+    const unifiedRows = [];
     let parsedRowCount = 0;
 
     for (const file of files) {
       const text = await file.text();
       const parsed = parseCsv(text);
-      if (!parsed.rows.length) {
-        continue;
-      }
+      if (!parsed.rows.length) continue;
 
       parsedRowCount += parsed.rows.length;
-
       const parser = selectParser(parsed.headers, file.name);
       if (!parser) {
-        throw new Error(`지원하지 않는 포맷입니다: ${file.name}. 현재 MVP는 Binance Spot Trade History CSV만 지원합니다.`);
+        throw new Error(`지원하지 않는 포맷입니다: ${file.name}`);
       }
 
-      const parsedRecords = parser.parseRows(parsed.rows, file.name);
-      rawRecords.push(...parsedRecords);
+      const normalizedRows = parser.parseRows(parsed.rows, file.name, { userId: "demo-user" });
+      unifiedRows.push(...normalizedRows);
     }
 
-    const walletRecords = parseWalletImportsPlaceholder(walletImportRequests);
-    rawRecords.push(...walletRecords);
+    unifiedRows.push(...parseWalletImportPlaceholder(walletRequests));
 
-    const normalizedEvents = normalizeTransactions(rawRecords);
-    if (!normalizedEvents.length) {
-      throw new Error("유효한 정규화 거래를 생성하지 못했습니다. CSV 헤더/값을 확인해 주세요.");
+    if (!unifiedRows.length) {
+      throw new Error("정규화된 unified transaction이 없습니다.");
     }
 
-    normalizedEvents.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    insertUnifiedTransactions(unifiedRows);
+    const normalizedFromTable = listUnifiedTransactions();
+    const transferMatched = matchTransfers(normalizedFromTable);
+    const realized = calculateRealizedProfit(transferMatched, "demo-user");
 
-    const fifoResult = calculateFifoRealizedPnl(normalizedEvents);
-    const transferMatches = matchTransfers(normalizedEvents);
-    const fxRates = buildFxRates(normalizedEvents);
-    const summary = buildTaxSummary(normalizedEvents, fifoResult.records, fifoResult.warnings);
+    const unifiedTransactions = realized.unifiedTransactions.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    clearUnifiedTransactions();
+    insertUnifiedTransactions(unifiedTransactions);
+    const unifiedSourceOfTruth = listUnifiedTransactions();
 
-    const packageBlob = await buildEvidenceZip({
-      events: normalizedEvents,
-      tradeProfitRecords: fifoResult.records,
+    insertRealizedProfitLots(realized.realizedLots);
+    const realizedLots = listRealizedProfitLots();
+
+    const fxRates = buildFxRatesForExport(unifiedSourceOfTruth);
+    const summary = buildTaxSummary(unifiedSourceOfTruth, realizedLots, realized.warnings);
+
+    const zipBlob = await buildZipEvidencePackage({
+      unifiedTransactions: unifiedSourceOfTruth,
+      realizedLots,
       fxRates,
       summary,
     });
 
-    state.events = normalizedEvents;
-    state.tradeProfitRecords = fifoResult.records;
+    state.unifiedTransactions = unifiedSourceOfTruth;
+    state.realizedLots = realizedLots;
     state.summary = summary;
-    state.packageFiles = packageBlob;
-    state.warnings = fifoResult.warnings;
+    state.packageFiles = zipBlob;
+    state.warnings = realized.warnings;
     state.processing = {
       parsedRowCount,
-      normalizedCount: normalizedEvents.length,
-      realizedSellCount: fifoResult.realizedSellCount,
-      transferMatchCount: transferMatches.length,
-      walletImportRequestCount: walletImportRequests.length,
+      normalizedCount: unifiedSourceOfTruth.length,
+      realizedSellCount: realized.realizedSellCount,
       evidenceGenerated: true,
       outputFiles: OUTPUT_FILES.slice(),
     };
 
-    renderSummary({
-      summary,
-      parsedRowCount,
-      normalizedCount: normalizedEvents.length,
-      realizedSellCount: fifoResult.realizedSellCount,
-      transferMatchCount: transferMatches.length,
-      outputFiles: OUTPUT_FILES,
-    });
+    renderSummary(state.processing, summary);
+    renderLedgerPreview(unifiedSourceOfTruth);
 
-    renderLedgerPreview(normalizedEvents);
     dom.downloadBtn.disabled = false;
     dom.statsCard.hidden = false;
     dom.previewCard.hidden = false;
@@ -183,10 +182,8 @@ async function handleProcess() {
       [
         "처리 결과",
         `- 파싱된 행 수: ${parsedRowCount}`,
-        `- 정규화된 거래 수: ${normalizedEvents.length}`,
-        `- 실현손익 계산 건수: ${fifoResult.realizedSellCount}`,
-        `- 전송 매칭 건수(준비중): ${transferMatches.length}`,
-        `- 지갑 주소 입력 수(준비중): ${walletImportRequests.length}`,
+        `- 정규화된 거래 수: ${unifiedSourceOfTruth.length}`,
+        `- 실현손익 계산 건수: ${realized.realizedSellCount}`,
         "- 증빙 파일 생성: 성공",
         `- 생성된 증빙 파일 목록: ${OUTPUT_FILES.join(", ")}`,
       ].join("\n")
@@ -197,20 +194,36 @@ async function handleProcess() {
   }
 }
 
-function selectParser(headers, fileName) {
-  for (const parser of PARSER_REGISTRY) {
-    if (parser.canParse(headers, fileName)) {
-      return parser;
-    }
-  }
-  return null;
+function renderSummary(processing, summary) {
+  const items = [
+    ["파싱된 행 수", processing.parsedRowCount],
+    ["정규화된 거래 수", processing.normalizedCount],
+    ["실현손익 계산 건수", processing.realizedSellCount],
+    ["총 거래 건수", summary.totalTransactionCount],
+    ["순이익 (KRW)", format(summary.netTradingProfitKrw)],
+    ["총 과세대상 (KRW)", format(summary.totalTaxableAmountKrw)],
+    ["증빙 파일 생성", processing.evidenceGenerated ? "성공" : "실패"],
+  ];
+
+  dom.statsGrid.innerHTML = items
+    .map(([label, value]) => `<div class="stat-item"><div class="label">${label}</div><div class="value">${value}</div></div>`)
+    .join("");
+}
+
+function renderLedgerPreview(unifiedTransactions) {
+  const rows = unifiedTransactions
+    .slice(0, 30)
+    .map(
+      (tx) =>
+        `<tr><td>${tx.timestamp}</td><td>${tx.source_type}</td><td>${tx.exchange}</td><td>${tx.event_type}</td><td>${tx.asset_in}/${tx.asset_out}</td><td>${round(tx.amount_in)}</td><td>${round(tx.price_usdt)}</td><td>${round(tx.price_krw)}</td><td>${tx.source_file}</td></tr>`
+    )
+    .join("");
+
+  dom.ledgerPreview.innerHTML = rows;
 }
 
 function handleDownload() {
-  if (!state.packageFiles) {
-    return;
-  }
-
+  if (!state.packageFiles) return;
   const blobUrl = URL.createObjectURL(state.packageFiles);
   const link = document.createElement("a");
   link.href = blobUrl;
@@ -219,8 +232,11 @@ function handleDownload() {
   URL.revokeObjectURL(blobUrl);
 }
 
-function setStatus(text) {
-  dom.status.textContent = text;
+function selectParser(headers, fileName) {
+  for (const parser of PARSER_REGISTRY) {
+    if (parser.canParse(headers, fileName)) return parser;
+  }
+  return null;
 }
 
 function parseCsv(text) {
@@ -231,7 +247,6 @@ function parseCsv(text) {
 
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
-
     if (ch === '"') {
       const nextCh = text[i + 1];
       if (inQuotes && nextCh === '"') {
@@ -250,14 +265,10 @@ function parseCsv(text) {
     }
 
     if ((ch === "\n" || ch === "\r") && !inQuotes) {
-      if (ch === "\r" && text[i + 1] === "\n") {
-        i += 1;
-      }
+      if (ch === "\r" && text[i + 1] === "\n") i += 1;
       row.push(value.trim());
       value = "";
-      if (row.some((cell) => cell !== "")) {
-        rows.push(row);
-      }
+      if (row.some((cell) => cell !== "")) rows.push(row);
       row = [];
       continue;
     }
@@ -267,14 +278,10 @@ function parseCsv(text) {
 
   if (value.length || row.length) {
     row.push(value.trim());
-    if (row.some((cell) => cell !== "")) {
-      rows.push(row);
-    }
+    if (row.some((cell) => cell !== "")) rows.push(row);
   }
 
-  if (rows.length < 2) {
-    return { headers: [], rows: [] };
-  }
+  if (rows.length < 2) return { headers: [], rows: [] };
 
   const headers = rows[0].map((h) => normalizeHeader(h));
   const mappedRows = rows.slice(1).map((cells) => {
@@ -298,45 +305,15 @@ function normalizeHeader(value) {
     .replace(/\s+/g, " ");
 }
 
-function renderSummary({ summary, parsedRowCount, normalizedCount, realizedSellCount, transferMatchCount, outputFiles }) {
-  const items = [
-    ["파싱된 행 수", parsedRowCount],
-    ["정규화된 거래 수", normalizedCount],
-    ["실현손익 계산 건수", realizedSellCount],
-    ["전송 매칭 건수(준비중)", transferMatchCount],
-    ["총 거래 건수", summary.totalTransactionCount],
-    ["순이익 (USDT)", summary.netTradingProfitUsdt],
-    ["순이익 (KRW)", formatNumber(summary.netTradingProfitKrw)],
-    ["총 과세대상 (KRW)", formatNumber(summary.totalTaxableAmountKrw)],
-    ["증빙 파일 생성", "성공"],
-    ["증빙 파일 수", outputFiles.length],
-  ];
-
-  dom.statsGrid.innerHTML = items
-    .map(
-      ([label, value]) =>
-        `<div class="stat-item"><div class="label">${label}</div><div class="value">${value}</div></div>`
-    )
-    .join("");
+function setStatus(text) {
+  dom.status.textContent = text;
 }
 
-function renderLedgerPreview(events) {
-  const rows = events
-    .slice(0, 30)
-    .map(
-      (event) =>
-        `<tr><td>${event.timestamp}</td><td>${event.source_type}</td><td>${event.exchange}</td><td>${event.transaction_type}</td><td>${event.base_asset}/${event.quote_asset}</td><td>${event.amount}</td><td>${round(event.price_usdt)}</td><td>${round(event.price_krw)}</td><td>${event.source_file}</td></tr>`
-    )
-    .join("");
-
-  dom.ledgerPreview.innerHTML = rows;
+function format(num) {
+  return new Intl.NumberFormat("ko-KR").format(Number.isFinite(num) ? num : 0);
 }
 
 function round(value) {
   if (!Number.isFinite(value)) return "";
   return Math.round((value + Number.EPSILON) * 100000000) / 100000000;
-}
-
-function formatNumber(num) {
-  return new Intl.NumberFormat("ko-KR").format(Number.isFinite(num) ? num : 0);
 }

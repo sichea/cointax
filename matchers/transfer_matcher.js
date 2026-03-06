@@ -1,5 +1,5 @@
-export function matchTransfers(events) {
-  void events;
-  // Placeholder: on-chain + exchange transfer matching will be implemented in a later phase.
-  return [];
+export function matchTransfers(unifiedTransactions) {
+  // Placeholder for future CEX <-> on-chain transfer grouping.
+  // It will assign transfer_group_id on both ends of matched transfers.
+  return unifiedTransactions.map((tx) => ({ ...tx }));
 }

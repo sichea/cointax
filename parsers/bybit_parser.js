@@ -1,8 +1,10 @@
-export function canParseBybit() {
+export function canParseBybit(headers = [], fileName = "") {
+  void headers;
+  void fileName;
   return false;
 }
 
 export function parseBybitRows() {
-  // Placeholder: future Bybit parser.
+  // Placeholder for Bybit parser -> unified schema rows.
   return [];
 }

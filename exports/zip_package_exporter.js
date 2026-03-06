@@ -17,26 +17,23 @@ export const OUTPUT_FILES = [
 
 const FX_HEADERS = ["timestamp", "usdt_krw", "btc_krw", "eth_krw", "source"];
 
-export async function buildEvidenceZip({ events, tradeProfitRecords, fxRates, summary }) {
+export async function buildZipEvidencePackage({ unifiedTransactions, realizedLots, fxRates, summary }) {
   const zip = new JSZip();
 
-  zip.file("transaction_ledger.csv", toCsvWithHeaders(TRANSACTION_LEDGER_HEADERS, buildTransactionLedgerRows(events)));
-  zip.file("trade_profit_report.csv", toCsvWithHeaders(TRADE_PROFIT_HEADERS, buildTradeProfitRows(tradeProfitRecords)));
-  zip.file("airdrop_income.csv", toCsvWithHeaders(AIRDROP_INCOME_HEADERS, buildAirdropIncomeRows(events)));
-  zip.file("defi_income.csv", toCsvWithHeaders(DEFI_INCOME_HEADERS, buildDefiIncomeRows(events)));
-  zip.file("transfer_records.csv", toCsvWithHeaders(TRANSFER_RECORDS_HEADERS, buildTransferRecordRows(events)));
-  zip.file("fx_rates.csv", toCsvWithHeaders(FX_HEADERS, fxRates));
+  zip.file("transaction_ledger.csv", toCsv(TRANSACTION_LEDGER_HEADERS, buildTransactionLedgerRows(unifiedTransactions)));
+  zip.file("trade_profit_report.csv", toCsv(TRADE_PROFIT_HEADERS, buildTradeProfitRows(realizedLots)));
+  zip.file("airdrop_income.csv", toCsv(AIRDROP_INCOME_HEADERS, buildAirdropIncomeRows(unifiedTransactions)));
+  zip.file("defi_income.csv", toCsv(DEFI_INCOME_HEADERS, buildDefiIncomeRows(unifiedTransactions)));
+  zip.file("transfer_records.csv", toCsv(TRANSFER_RECORDS_HEADERS, buildTransferRecordRows(unifiedTransactions)));
+  zip.file("fx_rates.csv", toCsv(FX_HEADERS, fxRates));
   zip.file("tax_summary.pdf", buildTaxSummaryPdf(summary));
 
   return zip.generateAsync({ type: "blob" });
 }
 
-function toCsvWithHeaders(headers, rows) {
-  if (!rows.length) {
-    return headers.join(",");
-  }
-
-  const body = rows.map((row) => headers.map((header) => escapeCsv(row[header])).join(","));
+function toCsv(headers, rows) {
+  if (!rows.length) return headers.join(",");
+  const body = rows.map((row) => headers.map((h) => escapeCsv(row[h])).join(","));
   return `${headers.join(",")}\n${body.join("\n")}`;
 }
 
