@@ -12,6 +12,12 @@ const EVENT_TYPES = Object.freeze({
   UNKNOWN: "UNKNOWN",
 });
 
+const SOURCE_TYPES = Object.freeze({
+  EXCHANGE_CSV: "EXCHANGE_CSV",
+  EXCHANGE_API: "EXCHANGE_API",
+  WALLET_ONCHAIN: "WALLET_ONCHAIN",
+});
+
 const OUTPUT_FILES = [
   "transaction_ledger.csv",
   "trade_profit_report.csv",
@@ -33,6 +39,7 @@ const state = {
   packageFiles: null,
   warnings: [],
   processing: null,
+  walletImportRequests: [],
 };
 
 const EXCHANGE_PARSERS = {
@@ -65,6 +72,8 @@ const dom = {
   processBtn: document.getElementById("processBtn"),
   downloadBtn: document.getElementById("downloadBtn"),
   themeToggle: document.getElementById("themeToggle"),
+  evmWalletAddress: document.getElementById("evmWalletAddress"),
+  solanaWalletAddress: document.getElementById("solanaWalletAddress"),
   status: document.getElementById("status"),
   statsCard: document.getElementById("statsCard"),
   statsGrid: document.getElementById("statsGrid"),
@@ -106,8 +115,15 @@ function setTheme(theme) {
 
 async function handleProcess() {
   const files = Array.from(dom.files.files || []);
-  if (!files.length) {
-    setStatus("Binance Spot Trade History CSV 파일을 먼저 선택하세요.");
+  const walletImportRequests = collectWalletImportRequests();
+  state.walletImportRequests = walletImportRequests;
+
+  if (!files.length && !walletImportRequests.length) {
+    setStatus("Binance Spot Trade History CSV 파일 또는 지갑 주소를 입력하세요.");
+    return;
+  }
+  if (!files.length && walletImportRequests.length) {
+    setStatus("지갑 주소 온체인 가져오기는 준비 중입니다. 현재는 Binance Spot Trade History CSV를 함께 업로드해야 합니다.");
     return;
   }
 
@@ -115,7 +131,7 @@ async function handleProcess() {
   dom.downloadBtn.disabled = true;
 
   try {
-    const normalizedEvents = [];
+    const exchangeEvents = [];
     let parsedRowCount = 0;
 
     for (const file of files) {
@@ -132,8 +148,11 @@ async function handleProcess() {
       }
 
       const mappedEvents = normalizeRowsForExchange(parsed.rows, exchange, file.name, parsed.headers);
-      normalizedEvents.push(...mappedEvents);
+      exchangeEvents.push(...mappedEvents);
     }
+
+    const walletOnchainEvents = buildWalletOnchainPlaceholderEvents(walletImportRequests);
+    const normalizedEvents = mergeNormalizedLedgerEvents(exchangeEvents, walletOnchainEvents);
 
     if (!normalizedEvents.length) {
       throw new Error("유효한 Binance Spot 거래 내역을 찾지 못했습니다.");
@@ -163,6 +182,7 @@ async function handleProcess() {
       realizedSellCount: fifoResult.realizedSellCount,
       evidenceGenerated: true,
       outputFiles: OUTPUT_FILES.slice(),
+      walletImportRequestCount: walletImportRequests.length,
     };
 
     renderSummary({
@@ -184,6 +204,7 @@ async function handleProcess() {
         `- 파싱된 행 수: ${parsedRowCount}`,
         `- 정규화된 거래 수: ${normalizedEvents.length}`,
         `- 실현손익 계산 건수: ${fifoResult.realizedSellCount}`,
+        `- 지갑 주소 입력 수(준비중): ${walletImportRequests.length}`,
         "- 증빙 파일 생성: 성공",
         `- 생성된 증빙 파일 목록: ${OUTPUT_FILES.join(", ")}`,
       ].join("\n")
@@ -384,12 +405,17 @@ function mapBinanceTradeRow(row, columns, exchange, sourceName, index) {
 
   const normalizedEvent = {
     id: externalId || `${exchange}-${sourceName}-${index + 1}`,
+    source_type: SOURCE_TYPES.EXCHANGE_CSV,
+    source_name: exchange,
     event_type: eventType,
     transaction_type: eventType,
     timestamp,
     exchange,
     wallet_or_source: walletOrSource || exchange,
     wallet_or_destination: walletOrDestination || exchange,
+    wallet_address: "",
+    from_address: "",
+    to_address: "",
     base_asset: baseAsset,
     quote_asset: quoteAsset,
     amount,
@@ -401,6 +427,8 @@ function mapBinanceTradeRow(row, columns, exchange, sourceName, index) {
     fee_asset: feeAsset,
     fee_usdt: Number.isFinite(feeUsdt) ? feeUsdt : 0,
     tx_hash: txHash,
+    protocol: "BINANCE_SPOT",
+    chain: "CEX",
     source_file: sourceName,
     note: `${exchange} Spot Trade History`,
   };
@@ -413,6 +441,9 @@ function mapBinanceTradeRow(row, columns, exchange, sourceName, index) {
 }
 
 function isValidNormalizedEvent(event) {
+  if (!Object.values(SOURCE_TYPES).includes(event.source_type)) {
+    return false;
+  }
   if (!event.timestamp || !event.base_asset || !event.quote_asset) {
     return false;
   }
@@ -426,6 +457,42 @@ function isValidNormalizedEvent(event) {
     return false;
   }
   return true;
+}
+
+function collectWalletImportRequests() {
+  const requests = [];
+  const evmAddress = String(dom.evmWalletAddress?.value || "").trim();
+  const solAddress = String(dom.solanaWalletAddress?.value || "").trim();
+
+  if (evmAddress) {
+    requests.push({
+      source_type: SOURCE_TYPES.WALLET_ONCHAIN,
+      source_name: "EVM Wallet Import",
+      chain: "EVM",
+      wallet_address: evmAddress,
+      protocol: "",
+    });
+  }
+  if (solAddress) {
+    requests.push({
+      source_type: SOURCE_TYPES.WALLET_ONCHAIN,
+      source_name: "Solana Wallet Import",
+      chain: "SOLANA",
+      wallet_address: solAddress,
+      protocol: "",
+    });
+  }
+  return requests;
+}
+
+function buildWalletOnchainPlaceholderEvents(walletImportRequests) {
+  // Reserved for future on-chain ingestion (EVM/Solana indexers).
+  void walletImportRequests;
+  return [];
+}
+
+function mergeNormalizedLedgerEvents(exchangeEvents, walletEvents) {
+  return [...exchangeEvents, ...walletEvents];
 }
 
 function calculateFifoRealizedPnl(events) {
@@ -608,7 +675,14 @@ async function buildEvidencePackage({ events, tradeProfitRecords, fxRates, summa
     toCsvWithHeaders(
       [
         "timestamp",
+        "source_type",
+        "source_name",
         "exchange",
+        "chain",
+        "protocol",
+        "wallet_address",
+        "from_address",
+        "to_address",
         "wallet_or_source",
         "wallet_or_destination",
         "transaction_type",
@@ -717,7 +791,14 @@ async function buildEvidencePackage({ events, tradeProfitRecords, fxRates, summa
 function buildTransactionLedgerRows(events) {
   return events.map((event) => ({
     timestamp: event.timestamp,
+    source_type: event.source_type,
+    source_name: event.source_name,
     exchange: event.exchange,
+    chain: event.chain,
+    protocol: event.protocol,
+    wallet_address: event.wallet_address,
+    from_address: event.from_address,
+    to_address: event.to_address,
     wallet_or_source: event.wallet_or_source,
     wallet_or_destination: event.wallet_or_destination,
     transaction_type: event.transaction_type,

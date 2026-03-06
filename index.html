@@ -27,6 +27,15 @@
       <p id="status" class="status">아직 처리된 파일이 없습니다.</p>
     </section>
 
+    <section class="card">
+      <h2>1-2. 지갑 주소 가져오기 (준비중)</h2>
+      <p class="muted">온체인 트랜잭션 연동을 위한 입력 필드입니다. 현재 MVP에서는 파싱은 미구현이며 스키마/파이프라인만 준비되어 있습니다.</p>
+      <div class="upload-row">
+        <input id="evmWalletAddress" type="text" placeholder="EVM Wallet Address (예: 0x...)" />
+        <input id="solanaWalletAddress" type="text" placeholder="Solana Wallet Address (예: ...)" />
+      </div>
+    </section>
+
     <section class="card stats" id="statsCard" hidden>
       <h2>2. 처리 결과</h2>
       <div class="stats-grid" id="statsGrid"></div>
