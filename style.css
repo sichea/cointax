@@ -45,6 +45,10 @@ body {
   color: var(--muted);
 }
 
+.status {
+  white-space: pre-line;
+}
+
 .card {
   background: var(--card);
   border: 1px solid var(--line);
