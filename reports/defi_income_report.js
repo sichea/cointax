@@ -14,7 +14,12 @@ export const DEFI_INCOME_HEADERS = [
 
 export function buildDefiIncomeRows(unifiedTransactions) {
   return unifiedTransactions
-    .filter((tx) => tx.event_type === "STAKING_REWARD" || tx.event_type === "DEFI_REWARD")
+    .filter(
+      (tx) =>
+        (tx.event_type === "STAKING_REWARD" || tx.event_type === "DEFI_REWARD")
+        && tx.transfer_match_status !== "AUTO_MATCHED"
+        && tx.transfer_match_status !== "MANUALLY_CONFIRMED"
+    )
     .map((tx) => ({
       timestamp: tx.timestamp,
       protocol: tx.protocol,

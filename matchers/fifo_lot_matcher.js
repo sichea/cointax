@@ -6,7 +6,13 @@ export function matchFifoLots(unifiedTransactions) {
   const warnings = [];
 
   const txs = unifiedTransactions.map((tx) => ({ ...tx }));
-  const tradeRows = txs.filter((tx) => isTradeEventType(tx.event_type));
+  const tradeRows = txs.filter(
+    (tx) =>
+      isTradeEventType(tx.event_type)
+      && tx.event_type !== EVENT_TYPES.INTERNAL_TRANSFER
+      && tx.transfer_match_status !== "AUTO_MATCHED"
+      && tx.transfer_match_status !== "MANUALLY_CONFIRMED"
+  );
 
   for (const tx of tradeRows) {
     const asset = tx.event_type === EVENT_TYPES.TRADE_BUY ? tx.asset_in : tx.asset_out;

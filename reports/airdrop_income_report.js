@@ -13,7 +13,12 @@ export const AIRDROP_INCOME_HEADERS = [
 
 export function buildAirdropIncomeRows(unifiedTransactions) {
   return unifiedTransactions
-    .filter((tx) => tx.event_type === "AIRDROP")
+    .filter(
+      (tx) =>
+        tx.event_type === "AIRDROP"
+        && tx.transfer_match_status !== "AUTO_MATCHED"
+        && tx.transfer_match_status !== "MANUALLY_CONFIRMED"
+    )
     .map((tx) => ({
       timestamp: tx.timestamp,
       asset: tx.asset_in,

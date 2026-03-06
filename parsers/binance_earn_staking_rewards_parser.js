@@ -3,61 +3,51 @@ import { SOURCE_TYPES } from "./source_types.js";
 
 const COLUMN_ALIASES = {
   time: ["time", "date", "datetime"],
-  operation: ["operation", "type", "transaction type"],
-  coin: ["coin", "asset", "currency"],
-  change: ["change", "amount", "delta"],
+  asset: ["asset", "coin", "currency"],
+  amount: ["amount", "reward amount", "quantity"],
+  product: ["product", "program", "pool", "protocol"],
+  rewardType: ["reward type", "type", "income type"],
+  status: ["status"],
   remark: ["remark", "note", "description"],
-  account: ["account", "wallet", "account type"],
-  txHash: ["txid", "tx hash", "tx_hash", "transaction id"],
-  chain: ["network", "chain"],
 };
 
-export function canParseBinanceTransactionHistory() {
-  return false;
-}
-
-export function parseBinanceTransactionHistoryRows(rows, sourceFile, { userId = "demo-user" } = {}) {
+export function parseBinanceEarnStakingRewardsRows(rows, sourceFile, { userId = "demo-user" } = {}) {
   const sample = rows[0] || {};
   const columns = resolveColumns(sample);
 
   return rows
-    .map((row, index) => normalize_binance_transaction_history_row(row, sourceFile, index, columns, userId))
+    .map((row, index) => normalize_binance_earn_staking_rewards_row(row, sourceFile, index, columns, userId))
     .filter(Boolean);
 }
 
-export function normalize_binance_transaction_history_row(row, fileName, index, columns, userId = "demo-user") {
+export function normalize_binance_earn_staking_rewards_row(row, fileName, index, columns, userId = "demo-user") {
   const timestamp = normalizeTimestamp(getCell(row, columns.time));
-  const operation = String(getCell(row, columns.operation) || "").trim();
-  const coin = toUpper(getCell(row, columns.coin));
-  const change = toNumber(getCell(row, columns.change));
+  const asset = toUpper(getCell(row, columns.asset));
+  const amount = toNumber(getCell(row, columns.amount));
+  const product = String(getCell(row, columns.product) || "").trim();
+  const rewardType = String(getCell(row, columns.rewardType) || "").trim();
+  const rowStatus = String(getCell(row, columns.status) || "").trim();
   const remark = String(getCell(row, columns.remark) || "").trim();
-  const account = String(getCell(row, columns.account) || "").trim();
 
-  if (!timestamp || !coin || !Number.isFinite(change) || change === 0) {
+  if (!timestamp || !asset || !Number.isFinite(amount) || amount <= 0) {
     return null;
   }
 
-  const eventType = classifyOperation(operation, remark);
+  const eventType = classifyEarnEventType(product, rewardType, remark);
   const incomeCategory =
-    eventType === EVENT_TYPES.UNKNOWN ? INCOME_CATEGORIES.OTHER : INCOME_CATEGORIES.NONE;
-
-  const amountAbs = Math.abs(change);
-  const assetIn = change > 0 ? coin : null;
-  const amountIn = change > 0 ? amountAbs : null;
-  const assetOut = change < 0 ? coin : null;
-  const amountOut = change < 0 ? amountAbs : null;
+    eventType === EVENT_TYPES.DEFI_REWARD ? INCOME_CATEGORIES.DEFI_INCOME : INCOME_CATEGORIES.STAKING_INCOME;
 
   const rawRowIndex = Number.isInteger(row.__raw_row_index) ? row.__raw_row_index : index + 1;
   const now = new Date().toISOString();
 
   return {
-    id: `binance-tx-${fileName}-${rawRowIndex}`,
+    id: `binance-earn-${fileName}-${rawRowIndex}`,
     user_id: userId,
     created_at: now,
     updated_at: now,
 
     source_type: SOURCE_TYPES.EXCHANGE_CSV,
-    source_name: "Binance Transaction History",
+    source_name: "Binance Earn/Staking History",
     source_file: fileName,
     raw_row_index: rawRowIndex,
     raw_description: JSON.stringify(stripMeta(row)),
@@ -66,17 +56,17 @@ export function normalize_binance_transaction_history_row(row, fileName, index, 
     event_type: eventType,
     income_category: incomeCategory,
     exchange: "Binance",
-    chain: getCell(row, columns.chain) || null,
-    protocol: null,
+    chain: null,
+    protocol: product || "Binance Earn",
     wallet_address: null,
     from_address: null,
     to_address: null,
-    tx_hash: getCell(row, columns.txHash) || null,
+    tx_hash: null,
 
-    asset_in: assetIn,
-    asset_out: assetOut,
-    amount_in: amountIn,
-    amount_out: amountOut,
+    asset_in: asset,
+    asset_out: null,
+    amount_in: amount,
+    amount_out: null,
     fee: null,
     fee_asset: null,
 
@@ -91,31 +81,26 @@ export function normalize_binance_transaction_history_row(row, fileName, index, 
     transfer_group_id: null,
     matched_lot_id: null,
     calculation_method: null,
-    note: [account, operation, remark].filter(Boolean).join(" | ") || null,
+    note: [product, rewardType, rowStatus, remark].filter(Boolean).join(" | ") || null,
     status: TRANSACTION_STATUS.NORMALIZED,
   };
 }
 
-function classifyOperation(operation, remark) {
-  const text = `${operation} ${remark}`.toLowerCase();
-  if (/(deposit|입금)/.test(text)) return EVENT_TYPES.DEPOSIT;
-  if (/(withdraw|출금)/.test(text)) return EVENT_TYPES.WITHDRAWAL;
-  if (/(transfer|internal|spot->|funding|margin|between account|account transfer)/.test(text)) {
-    return EVENT_TYPES.INTERNAL_TRANSFER;
-  }
-  return EVENT_TYPES.UNKNOWN;
+function classifyEarnEventType(product, rewardType, remark) {
+  const text = `${product} ${rewardType} ${remark}`.toLowerCase();
+  if (/(launchpool|farming|defi|liquidity|yield)/.test(text)) return EVENT_TYPES.DEFI_REWARD;
+  return EVENT_TYPES.STAKING_REWARD;
 }
 
 function resolveColumns(sample) {
   return {
     time: findColumn(sample, COLUMN_ALIASES.time),
-    operation: findColumn(sample, COLUMN_ALIASES.operation),
-    coin: findColumn(sample, COLUMN_ALIASES.coin),
-    change: findColumn(sample, COLUMN_ALIASES.change),
+    asset: findColumn(sample, COLUMN_ALIASES.asset),
+    amount: findColumn(sample, COLUMN_ALIASES.amount),
+    product: findColumn(sample, COLUMN_ALIASES.product),
+    rewardType: findColumn(sample, COLUMN_ALIASES.rewardType),
+    status: findColumn(sample, COLUMN_ALIASES.status),
     remark: findColumn(sample, COLUMN_ALIASES.remark),
-    account: findColumn(sample, COLUMN_ALIASES.account),
-    txHash: findColumn(sample, COLUMN_ALIASES.txHash),
-    chain: findColumn(sample, COLUMN_ALIASES.chain),
   };
 }
 

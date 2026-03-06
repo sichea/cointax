@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS unified_transactions (
   fx_rate_usdt_krw NUMERIC,
   pricing_source TEXT,
   transfer_group_id TEXT,
+  transfer_match_status TEXT,
+  matched_transaction_id TEXT,
+  transfer_match_confidence TEXT,
+  transfer_match_reason TEXT,
   matched_lot_id TEXT,
   calculation_method TEXT,
   note TEXT,
@@ -90,6 +94,16 @@ CREATE TABLE IF NOT EXISTS evidence_packages (
   generated_at TIMESTAMP NOT NULL,
   summary_json TEXT NOT NULL,
   status TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS user_owned_addresses (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  chain TEXT NOT NULL,
+  wallet_address TEXT NOT NULL,
+  label TEXT,
+  created_at TIMESTAMP NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
