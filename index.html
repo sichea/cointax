@@ -10,53 +10,91 @@
   <main class="app-shell">
     <header class="hero">
       <div class="hero-top">
-        <p class="eyebrow">서비스명</p>
+        <p class="eyebrow">Unified Crypto Tax Evidence</p>
         <button id="themeToggle" type="button" class="theme-toggle">다크모드</button>
       </div>
       <h1>코인 세무 제출용 증빙자료 생성기</h1>
-      <p class="subtitle">거래소/지갑 데이터에서 거래 흐름을 복원하여 세무사 제출용 증빙자료 파일을 생성하는 세무 증빙 재구성 시스템입니다.</p>
+      <p class="subtitle">거래소 CSV와 사용자 소유 지갑 주소의 온체인 활동을 하나의 증빙 파이프라인으로 정규화합니다.</p>
     </header>
 
     <section class="card">
       <h2>1. CSV 업로드</h2>
-      <p class="muted">현재 MVP 지원: Binance Spot Trade History (향후 Bybit/지갑/온체인 확장 예정)</p>
+      <p class="muted">Binance / Bybit CSV와 wallet on-chain sync 데이터를 함께 처리해 unified transaction ledger를 구성합니다.</p>
       <div class="upload-row">
         <input id="csvFiles" type="file" accept=".csv,text/csv" multiple />
-        <button id="processBtn" type="button">파일 처리</button>
+        <button id="processBtn" type="button">증빙 생성</button>
       </div>
       <p id="status" class="status">아직 처리된 파일이 없습니다.</p>
     </section>
 
     <section class="card">
-      <h2>1-2. 지갑 주소 가져오기 (준비중)</h2>
-      <p class="muted">온체인 트랜잭션 연동을 위한 입력 필드입니다. 현재 MVP에서는 파싱은 미구현이며 스키마/파이프라인만 준비되어 있습니다.</p>
-      <div class="upload-row">
-        <input id="evmWalletAddress" type="text" placeholder="EVM Wallet Address (예: 0x...)" />
-        <input id="solanaWalletAddress" type="text" placeholder="Solana Wallet Address (예: ...)" />
+      <div class="section-head">
+        <div>
+          <h2>2. Wallet Import</h2>
+          <p class="muted">등록된 지갑은 ownership anchor 이며 sync 시 온체인 활동이 unified transaction schema로 적재됩니다.</p>
+        </div>
+        <button id="syncAllWalletsBtn" type="button">Sync All Wallets</button>
       </div>
+      <div id="walletImportStatus" class="status-block muted"></div>
+      <div id="walletSyncSummary" class="status-block muted"></div>
+    </section>
+
+    <section class="card">
+      <h2>3. Add New Wallet</h2>
+      <div class="wallet-form-grid">
+        <label>
+          <span>Chain Family</span>
+          <select id="walletChainFamily"></select>
+        </label>
+        <label>
+          <span>Chain / Network</span>
+          <select id="walletChain"></select>
+        </label>
+        <label class="wallet-form-wide">
+          <span>Wallet Address</span>
+          <input id="walletAddressInput" type="text" placeholder="0x... 또는 Solana base58 주소" />
+        </label>
+        <label class="wallet-form-wide">
+          <span>Label</span>
+          <input id="walletLabelInput" type="text" placeholder="Main Metamask / Trading Wallet / Solana Airdrop Wallet" />
+        </label>
+      </div>
+      <div class="upload-row wallet-actions-row">
+        <button id="addWalletBtn" type="button">지갑 주소 저장</button>
+      </div>
+      <p id="walletFormStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>4. My Wallet Addresses</h2>
+      <div id="walletList" class="wallet-list"></div>
     </section>
 
     <section class="card stats" id="statsCard" hidden>
-      <h2>2. 처리 결과</h2>
+      <h2>5. 처리 결과</h2>
       <div class="stats-grid" id="statsGrid"></div>
-      <button id="downloadBtn" type="button" disabled>tax_evidence_package.zip 다운로드</button>
+      <div class="download-actions">
+        <button id="downloadBtn" type="button" disabled>tax_evidence_package.zip 다운로드</button>
+        <button id="downloadNarrativePdfBtn" type="button" class="secondary-btn" disabled>narrative_tax_report.pdf 다운로드</button>
+        <button id="downloadNarrativeJsonBtn" type="button" class="secondary-btn" disabled>narrative_tax_report.json 다운로드</button>
+      </div>
     </section>
 
     <section class="card" id="previewCard" hidden>
-      <h2>3. 거래 원장 미리보기</h2>
+      <h2>6. 거래 원장 미리보기</h2>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th>시각</th>
               <th>소스유형</th>
-              <th>거래소</th>
+              <th>소스</th>
               <th>거래유형</th>
-              <th>거래쌍</th>
+              <th>체인</th>
+              <th>자산</th>
               <th>수량</th>
-              <th>가격(USDT)</th>
-              <th>가격(KRW)</th>
-              <th>출처 파일</th>
+              <th>사용자 지갑 관여</th>
+              <th>출처</th>
             </tr>
           </thead>
           <tbody id="ledgerPreview"></tbody>
@@ -65,9 +103,15 @@
     </section>
 
     <section class="card" id="transferReviewCard" hidden>
-      <h2>4. 전송 매칭 검토 (준비중)</h2>
-      <p class="muted">자동 매칭된 내부 전송과 수동 검토 필요 건을 요약합니다.</p>
+      <h2>7. 전송 매칭 검토</h2>
+      <p class="muted">거래소 CSV와 wallet on-chain rows가 같은 transfer matcher로 처리됩니다.</p>
       <div id="transferReviewSummary" class="muted"></div>
+    </section>
+
+    <section class="card" id="narrativeCard" hidden>
+      <h2>8. Narrative Tax Report Preview</h2>
+      <p class="muted">회계사 검토용 설명형 증빙 리포트의 요약입니다. 상세 내용은 PDF/JSON 파일에 포함됩니다.</p>
+      <div id="narrativePreview" class="muted narrative-preview"></div>
     </section>
   </main>
 

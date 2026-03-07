@@ -1,5 +1,7 @@
 import { AIRDROP_INCOME_HEADERS, buildAirdropIncomeRows } from "../reports/airdrop_income_report.js";
 import { DEFI_INCOME_HEADERS, buildDefiIncomeRows } from "../reports/defi_income_report.js";
+import { buildNarrativeJsonString } from "./narrative_json_exporter.js";
+import { buildNarrativeTaxReportPdf } from "./narrative_pdf_exporter.js";
 import { TRANSACTION_LEDGER_HEADERS, buildTransactionLedgerRows } from "../reports/transaction_ledger_report.js";
 import { TRADE_PROFIT_HEADERS, buildTradeProfitRows } from "../reports/trade_profit_report.js";
 import { TRANSFER_RECORDS_HEADERS, buildTransferRecordRows } from "../reports/transfer_records_report.js";
@@ -13,11 +15,13 @@ export const OUTPUT_FILES = [
   "transfer_records.csv",
   "fx_rates.csv",
   "tax_summary.pdf",
+  "narrative_tax_report.pdf",
+  "narrative_tax_report.json",
 ];
 
 const FX_HEADERS = ["timestamp", "usdt_krw", "btc_krw", "eth_krw", "source"];
 
-export async function buildZipEvidencePackage({ unifiedTransactions, realizedLots, fxRates, summary }) {
+export async function buildZipEvidencePackage({ unifiedTransactions, realizedLots, fxRates, summary, narrativeReport }) {
   const zip = new JSZip();
 
   zip.file("transaction_ledger.csv", toCsv(TRANSACTION_LEDGER_HEADERS, buildTransactionLedgerRows(unifiedTransactions)));
@@ -27,6 +31,8 @@ export async function buildZipEvidencePackage({ unifiedTransactions, realizedLot
   zip.file("transfer_records.csv", toCsv(TRANSFER_RECORDS_HEADERS, buildTransferRecordRows(unifiedTransactions)));
   zip.file("fx_rates.csv", toCsv(FX_HEADERS, fxRates));
   zip.file("tax_summary.pdf", buildTaxSummaryPdf(summary));
+  zip.file("narrative_tax_report.pdf", buildNarrativeTaxReportPdf(narrativeReport));
+  zip.file("narrative_tax_report.json", buildNarrativeJsonString(narrativeReport));
 
   return zip.generateAsync({ type: "blob" });
 }

@@ -1,4 +1,5 @@
 import { EVENT_TYPES } from "../classifiers/event_classifier.js";
+import { buildOwnedAddressLookup, describeOwnedAddress } from "../wallets/wallet_registry.js";
 
 const DEFAULT_CONFIG = {
   matchWindowHours: 72,
@@ -27,7 +28,8 @@ export const TRANSFER_MATCH_CONFIDENCE = Object.freeze({
 
 export function matchTransfers(unifiedTransactions, config = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
-  const txs = unifiedTransactions.map((tx) => initializeTransferFields(tx));
+  const ownershipLookup = buildOwnedAddressLookup(cfg.userOwnedAddresses || []);
+  const txs = unifiedTransactions.map((tx) => initializeTransferFields(tx, ownershipLookup));
 
   const outgoingIdx = txs
     .map((tx, idx) => ({ tx, idx }))
@@ -47,13 +49,11 @@ export function matchTransfers(unifiedTransactions, config = {}) {
 
     const candidateScores = incomingIdx
       .filter(({ idx }) => !matchedIncoming.has(idx))
-      .map(({ tx: incoming, idx: inIndex }) => scoreCandidate(outgoing, incoming, cfg, inIndex))
+      .map(({ tx: incoming, idx: inIndex }) => scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup))
       .filter((s) => s.eligible)
       .sort((a, b) => b.score - a.score);
 
-    if (!candidateScores.length) {
-      continue;
-    }
+    if (!candidateScores.length) continue;
 
     const best = candidateScores[0];
     const incoming = txs[best.inIndex];
@@ -120,14 +120,15 @@ export function matchTransfers(unifiedTransactions, config = {}) {
   };
 }
 
-function initializeTransferFields(tx) {
+function initializeTransferFields(tx, ownershipLookup) {
+  const hydrated = hydrateOwnershipFlags(tx, ownershipLookup);
   return {
-    ...tx,
-    transfer_group_id: tx.transfer_group_id || null,
-    transfer_match_status: tx.transfer_match_status || TRANSFER_MATCH_STATUS.UNMATCHED,
-    matched_transaction_id: tx.matched_transaction_id || null,
-    transfer_match_confidence: tx.transfer_match_confidence || null,
-    transfer_match_reason: tx.transfer_match_reason || null,
+    ...hydrated,
+    transfer_group_id: hydrated.transfer_group_id || null,
+    transfer_match_status: hydrated.transfer_match_status || TRANSFER_MATCH_STATUS.UNMATCHED,
+    matched_transaction_id: hydrated.matched_transaction_id || null,
+    transfer_match_confidence: hydrated.transfer_match_confidence || null,
+    transfer_match_reason: hydrated.transfer_match_reason || null,
   };
 }
 
@@ -150,28 +151,20 @@ function isIncomingCandidate(tx) {
   return tx.asset_in && Number.isFinite(tx.amount_in) && tx.amount_in > 0;
 }
 
-function scoreCandidate(outgoing, incoming, cfg, inIndex) {
-  if (outgoing.id === incoming.id) {
-    return { eligible: false };
-  }
+function scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup) {
+  if (outgoing.id === incoming.id) return { eligible: false };
 
   const outAsset = String(outgoing.asset_out || "").toUpperCase();
   const inAsset = String(incoming.asset_in || "").toUpperCase();
-  if (!outAsset || outAsset !== inAsset) {
-    return { eligible: false };
-  }
+  if (!outAsset || outAsset !== inAsset) return { eligible: false };
 
   const outTime = new Date(outgoing.timestamp).getTime();
   const inTime = new Date(incoming.timestamp).getTime();
-  if (!Number.isFinite(outTime) || !Number.isFinite(inTime)) {
-    return { eligible: false };
-  }
+  if (!Number.isFinite(outTime) || !Number.isFinite(inTime)) return { eligible: false };
 
   const diffMs = Math.abs(inTime - outTime);
   const hours = diffMs / 3600000;
-  if (hours > cfg.matchWindowHours) {
-    return { eligible: false };
-  }
+  if (hours > cfg.matchWindowHours) return { eligible: false };
 
   const outAmount = Number(outgoing.amount_out);
   const inAmount = Number(incoming.amount_in);
@@ -189,6 +182,8 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex) {
     || (outgoing.to_address && incoming.wallet_address && outgoing.to_address === incoming.wallet_address)
     || (incoming.from_address && outgoing.wallet_address && incoming.from_address === outgoing.wallet_address);
 
+  const ownershipEvidence = collectOwnershipEvidence(outgoing, incoming, ownershipLookup);
+
   let confidence = null;
   let status = null;
   let score = 0;
@@ -198,11 +193,16 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex) {
   const withinManualTolerance = pctDiff <= cfg.manualReviewPercentageTolerance;
 
   if (withinStrictTolerance) {
-    if (hours <= cfg.highConfidenceWindowHours && (hasHashEvidence || hasAddressEvidence)) {
+    if (hasHashEvidence || hasAddressEvidence || ownershipEvidence.signalCount > 0) {
       confidence = TRANSFER_MATCH_CONFIDENCE.HIGH;
       status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
-      score = 100 - hours;
-      reason = `asset/amount/time aligned with strong evidence (hash/address), diff=${round(absDiff)}`;
+      score = 100 - hours + ownershipEvidence.signalCount * 5;
+      reason = buildReason(
+        `asset/amount/time aligned with strong evidence, diff=${round(absDiff)}`,
+        hasHashEvidence,
+        hasAddressEvidence,
+        ownershipEvidence.details
+      );
     } else {
       confidence = TRANSFER_MATCH_CONFIDENCE.MEDIUM;
       status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
@@ -210,10 +210,27 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex) {
       reason = `asset and amount matched within tolerance, diff=${round(absDiff)}, ${round(hours)}h apart`;
     }
   } else if (withinManualTolerance) {
-    confidence = TRANSFER_MATCH_CONFIDENCE.LOW;
-    status = TRANSFER_MATCH_STATUS.MANUAL_REVIEW;
-    score = 50 - hours;
-    reason = `possible fee-adjusted transfer, diff=${round(absDiff)} (${round(pctDiff * 100)}%)`;
+    if (ownershipEvidence.signalCount > 0 && hours <= cfg.highConfidenceWindowHours) {
+      confidence = TRANSFER_MATCH_CONFIDENCE.MEDIUM;
+      status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
+      score = 70 - hours + ownershipEvidence.signalCount * 5;
+      reason = buildReason(
+        `possible fee-adjusted internal transfer, diff=${round(absDiff)} (${round(pctDiff * 100)}%)`,
+        hasHashEvidence,
+        hasAddressEvidence,
+        ownershipEvidence.details
+      );
+    } else {
+      confidence = TRANSFER_MATCH_CONFIDENCE.LOW;
+      status = TRANSFER_MATCH_STATUS.MANUAL_REVIEW;
+      score = 50 - hours + ownershipEvidence.signalCount * 2;
+      reason = buildReason(
+        `possible fee-adjusted transfer, diff=${round(absDiff)} (${round(pctDiff * 100)}%)`,
+        hasHashEvidence,
+        hasAddressEvidence,
+        ownershipEvidence.details
+      );
+    }
   } else {
     return { eligible: false };
   }
@@ -223,7 +240,7 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex) {
     && String(outgoing.exchange || "") === String(incoming.exchange || "")
     && String(outgoing.source_file || "") === String(incoming.source_file || "");
 
-  if (contextDup && !hasHashEvidence && !hasAddressEvidence && hours < 0.05) {
+  if (contextDup && !hasHashEvidence && !hasAddressEvidence && ownershipEvidence.signalCount === 0 && hours < 0.05) {
     return { eligible: false };
   }
 
@@ -240,6 +257,62 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex) {
   };
 }
 
+function collectOwnershipEvidence(outgoing, incoming, ownershipLookup) {
+  const signals = [];
+
+  const ownedOutgoingWallet = lookupOwnedRecord(outgoing.wallet_address, ownershipLookup);
+  const ownedIncomingWallet = lookupOwnedRecord(incoming.wallet_address, ownershipLookup);
+  const ownedOutgoingTo = lookupOwnedRecord(outgoing.to_address, ownershipLookup);
+  const ownedOutgoingFrom = lookupOwnedRecord(outgoing.from_address, ownershipLookup);
+  const ownedIncomingFrom = lookupOwnedRecord(incoming.from_address, ownershipLookup);
+  const ownedIncomingTo = lookupOwnedRecord(incoming.to_address, ownershipLookup);
+
+  if (ownedOutgoingTo) signals.push(`destination is registered wallet ${describeOwnedAddress(ownedOutgoingTo)}`);
+  if (ownedIncomingFrom) signals.push(`source is registered wallet ${describeOwnedAddress(ownedIncomingFrom)}`);
+  if (ownedOutgoingWallet) signals.push(`outgoing wallet context is registered ${describeOwnedAddress(ownedOutgoingWallet)}`);
+  if (ownedIncomingWallet) signals.push(`incoming wallet context is registered ${describeOwnedAddress(ownedIncomingWallet)}`);
+  if (ownedOutgoingFrom && ownedIncomingTo) {
+    signals.push(
+      `both sides touch registered wallets ${describeOwnedAddress(ownedOutgoingFrom)} and ${describeOwnedAddress(ownedIncomingTo)}`
+    );
+  }
+
+  return {
+    signalCount: new Set(signals).size,
+    details: Array.from(new Set(signals)),
+  };
+}
+
+function buildReason(base, hasHashEvidence, hasAddressEvidence, ownershipDetails) {
+  const extras = [];
+  if (hasHashEvidence) extras.push("matching tx hash");
+  if (hasAddressEvidence) extras.push("matching address linkage");
+  extras.push(...ownershipDetails.map((detail) => `ownership evidence: ${detail}`));
+  return extras.length ? `${base}; ${extras.join("; ")}` : base;
+}
+
+function hydrateOwnershipFlags(tx, ownershipLookup) {
+  const walletRecord = lookupOwnedRecord(tx.wallet_address, ownershipLookup);
+  const fromRecord = lookupOwnedRecord(tx.from_address, ownershipLookup);
+  const toRecord = lookupOwnedRecord(tx.to_address, ownershipLookup);
+
+  return {
+    ...tx,
+    wallet_user_owned_address: Boolean(tx.wallet_user_owned_address || walletRecord),
+    from_user_owned_address: Boolean(tx.from_user_owned_address || fromRecord),
+    to_user_owned_address: Boolean(tx.to_user_owned_address || toRecord),
+    involves_user_owned_address: Boolean(tx.involves_user_owned_address || walletRecord || fromRecord || toRecord),
+    wallet_address_label: tx.wallet_address_label || walletRecord?.label || "",
+    from_address_label: tx.from_address_label || fromRecord?.label || "",
+    to_address_label: tx.to_address_label || toRecord?.label || "",
+  };
+}
+
+function lookupOwnedRecord(address, ownershipLookup) {
+  if (!address) return null;
+  return ownershipLookup.get(address) || null;
+}
+
 function generateTransferGroupId(counter, outgoing, incoming) {
   const base = new Date(Math.min(new Date(outgoing.timestamp).getTime(), new Date(incoming.timestamp).getTime()))
     .toISOString()
@@ -253,8 +326,8 @@ function buildGroupSummary(groupId, outgoing, incoming, score) {
     transfer_group_id: groupId,
     asset: outgoing.asset_out || incoming.asset_in,
     amount: incoming.amount_in,
-    outgoing_source: outgoing.source_name || outgoing.exchange || "",
-    incoming_destination: incoming.source_name || incoming.exchange || "",
+    outgoing_source: outgoing.to_address_label || outgoing.source_name || outgoing.exchange || outgoing.to_address || "",
+    incoming_destination: incoming.from_address_label || incoming.source_name || incoming.exchange || incoming.from_address || "",
     time_difference_hours: round(score.hours),
     confidence: score.confidence,
     transfer_match_status: score.status,

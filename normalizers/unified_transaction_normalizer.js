@@ -1,6 +1,4 @@
 import { applyClassification, classifyEventTypeFromRaw, TRANSACTION_STATUS } from "../classifiers/event_classifier.js";
-import { calculatePriceBundle } from "../pricing/asset_price_service.js";
-import { FX_RATE_SOURCE, getUsdtKrwAt } from "../pricing/fx_rate_service.js";
 
 export function normalizeUnifiedTransactions(rawTransactions, { userId = "demo-user" } = {}) {
   const now = new Date().toISOString();
@@ -12,7 +10,7 @@ export function normalizeUnifiedTransactions(rawTransactions, { userId = "demo-u
 
   return applyClassification(normalized).map((tx) => ({
     ...tx,
-    status: TRANSACTION_STATUS.PRICED,
+    status: TRANSACTION_STATUS.CLASSIFIED,
   }));
 }
 
@@ -30,18 +28,6 @@ function normalizeOne(raw, userId, now) {
   const assetIn = toUpperOrEmpty(raw.asset_in);
   const assetOut = toUpperOrEmpty(raw.asset_out);
 
-  const fxRate = getUsdtKrwAt(timestamp);
-  const priceBundle = calculatePriceBundle({
-    eventType,
-    assetIn,
-    assetOut,
-    amountIn,
-    amountOut,
-    fee,
-    feeAsset: raw.fee_asset,
-    usdtKrw: fxRate,
-  });
-
   const tx = {
     id: String(raw.id).trim(),
     user_id: String(raw.user_id || userId).trim(),
@@ -57,11 +43,19 @@ function normalizeOne(raw, userId, now) {
     timestamp,
     event_type: String(eventType).trim(),
     exchange: String(raw.exchange || "").trim(),
+    chain_family: String(raw.chain_family || "").trim(),
     chain: String(raw.chain || "").trim(),
     protocol: String(raw.protocol || "").trim(),
     wallet_address: String(raw.wallet_address || "").trim(),
     from_address: String(raw.from_address || "").trim(),
     to_address: String(raw.to_address || "").trim(),
+    wallet_address_label: String(raw.wallet_address_label || "").trim(),
+    from_address_label: String(raw.from_address_label || "").trim(),
+    to_address_label: String(raw.to_address_label || "").trim(),
+    wallet_user_owned_address: Boolean(raw.wallet_user_owned_address),
+    from_user_owned_address: Boolean(raw.from_user_owned_address),
+    to_user_owned_address: Boolean(raw.to_user_owned_address),
+    involves_user_owned_address: Boolean(raw.involves_user_owned_address),
     tx_hash: String(raw.tx_hash || "").trim(),
 
     asset_in: assetIn,
@@ -71,16 +65,17 @@ function normalizeOne(raw, userId, now) {
     fee,
     fee_asset: toUpperOrEmpty(raw.fee_asset),
 
-    price_usdt: priceBundle.price_usdt,
-    price_krw: priceBundle.price_krw,
-    amount_in_krw: priceBundle.amount_in_krw,
-    amount_out_krw: priceBundle.amount_out_krw,
-    fee_krw: priceBundle.fee_krw,
-    fx_rate_usdt_krw: fxRate,
-    pricing_source: FX_RATE_SOURCE,
+    price_usdt: toNullableNumber(raw.price_usdt),
+    price_krw: toNullableNumber(raw.price_krw),
+    amount_in_krw: toNullableNumber(raw.amount_in_krw),
+    amount_out_krw: toNullableNumber(raw.amount_out_krw),
+    fee_krw: toNullableNumber(raw.fee_krw),
+    fx_rate_usdt_krw: toNullableNumber(raw.fx_rate_usdt_krw),
+    pricing_source: String(raw.pricing_source || "").trim(),
 
     income_category: String(raw.income_category || "").trim(),
     transfer_group_id: String(raw.transfer_group_id || "").trim(),
+    classification_confidence: String(raw.classification_confidence || "").trim(),
     matched_lot_id: String(raw.matched_lot_id || "").trim(),
     calculation_method: String(raw.calculation_method || "FIFO").trim(),
     note: String(raw.note || "").trim(),
@@ -106,6 +101,11 @@ function toNumber(value) {
     .trim();
   const num = Number(cleaned);
   return Number.isFinite(num) ? num : NaN;
+}
+
+function toNullableNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 
 function toNumberOrZero(value) {

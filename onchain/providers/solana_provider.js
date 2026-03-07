@@ -1,0 +1,65 @@
+export const SOLANA_PROVIDER_ID = "demo-solana-provider";
+
+export async function fetchSolanaWalletActivity({ walletAddress, chain }) {
+  const wallet = String(walletAddress || "").trim();
+
+  return [
+    {
+      kind: "TOKEN_TRANSFER",
+      direction: "IN",
+      signature: `${wallet.slice(0, 8)}-sol-in`,
+      txHash: `${wallet.slice(0, 8)}-sol-in`,
+      timestamp: "2026-03-05T01:10:00.000Z",
+      chain,
+      walletAddress: wallet,
+      fromAddress: "9m3Gz6mS3pM6r6Q9aWJ7V7x2pWnYxgFZLC1L7Pb6f9Xa",
+      toAddress: wallet,
+      assetSymbol: "USDC",
+      tokenMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      amount: 42,
+      fee: 0.000005,
+      feeAsset: "SOL",
+      summary: "Incoming SPL token transfer",
+      provider: SOLANA_PROVIDER_ID,
+      protocol: "",
+    },
+    {
+      kind: "NATIVE_TRANSFER",
+      direction: "OUT",
+      signature: `${wallet.slice(0, 8)}-sol-out`,
+      txHash: `${wallet.slice(0, 8)}-sol-out`,
+      timestamp: "2026-03-05T11:30:00.000Z",
+      chain,
+      walletAddress: wallet,
+      fromAddress: wallet,
+      toAddress: "7YBinanceDeposit1111111111111111111111111111",
+      assetSymbol: "SOL",
+      amount: 0.75,
+      fee: 0.000005,
+      feeAsset: "SOL",
+      summary: "Outgoing SOL transfer to external deposit address",
+      provider: SOLANA_PROVIDER_ID,
+      protocol: "",
+    },
+    {
+      kind: "UNKNOWN",
+      direction: "OUT",
+      signature: `${wallet.slice(0, 8)}-sol-unk`,
+      txHash: `${wallet.slice(0, 8)}-sol-unk`,
+      timestamp: "2026-03-06T05:05:00.000Z",
+      chain,
+      walletAddress: wallet,
+      fromAddress: wallet,
+      toAddress: "JupiterRouter1111111111111111111111111111111",
+      fee: 0.000005,
+      feeAsset: "SOL",
+      summary: "Complex Solana transaction preserved as UNKNOWN",
+      provider: SOLANA_PROVIDER_ID,
+      protocol: "SOLANA_COMPLEX_PROTOCOL_PLACEHOLDER",
+      innerInstructions: [
+        { program: "Tokenkeg", action: "transferChecked" },
+        { program: "Jupiter", action: "route" },
+      ],
+    },
+  ];
+}
