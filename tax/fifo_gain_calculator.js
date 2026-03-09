@@ -163,6 +163,11 @@ function resolveAcquisitionUnitPriceUsdt(tx) {
 function resolveAcquisitionUnitPriceKrw(tx) {
   const directPriceKrw = readFiniteNumber(tx.price_krw);
   if (Number.isFinite(directPriceKrw)) return directPriceKrw;
+  const directPriceUsdt = readFiniteNumber(tx.price_usdt);
+  const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
+  if (Number.isFinite(directPriceUsdt) && Number.isFinite(fxRate) && fxRate > 0) {
+    return directPriceUsdt * fxRate;
+  }
   const quantity = acquisitionAmount(tx);
   const total = readFiniteNumber(tx.amount_in_krw);
   if (Number.isFinite(total) && Number.isFinite(quantity) && quantity > 0) {
@@ -190,13 +195,17 @@ function resolveDisposalUnitPriceUsdt(tx) {
 function resolveDisposalUnitPriceKrw(tx) {
   const directPriceKrw = readFiniteNumber(tx.price_krw);
   if (Number.isFinite(directPriceKrw)) return directPriceKrw;
+  const directPriceUsdt = readFiniteNumber(tx.price_usdt);
+  const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
+  if (Number.isFinite(directPriceUsdt) && Number.isFinite(fxRate) && fxRate > 0) {
+    return directPriceUsdt * fxRate;
+  }
   const quantity = disposalAmount(tx);
   const proceedsKrw = firstFiniteNumber(tx.amount_in_krw, tx.amount_out_krw);
   if (Number.isFinite(proceedsKrw) && Number.isFinite(quantity) && quantity > 0) {
     return proceedsKrw / quantity;
   }
   const proceedsUsdt = readFiniteNumber(tx.amount_in);
-  const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
   if (Number.isFinite(proceedsUsdt) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
     return (proceedsUsdt * fxRate) / quantity;
   }
