@@ -9,10 +9,11 @@ export async function resolveUsdtKrwRate({ timestamp, dayWindow = 7 }) {
   const targetMs = Date.parse(timestamp);
   if (!Number.isFinite(targetMs)) return missingRate();
 
-  const dayKey = new Date(targetMs).toISOString().slice(0, 10);
+  const effectiveTargetMs = clampToToday(targetMs);
+  const dayKey = new Date(effectiveTargetMs).toISOString().slice(0, 10);
   if (cache.has(dayKey)) return cache.get(dayKey);
 
-  const pending = resolveUsdtKrwRateUncached(targetMs, dayWindow).catch(() => missingRate());
+  const pending = resolveUsdtKrwRateUncached(effectiveTargetMs, dayWindow).catch(() => missingRate());
   cache.set(dayKey, pending);
   return pending;
 }
@@ -85,6 +86,11 @@ async function resolveUsdtKrwRateUncached(targetMs, dayWindow) {
 
 function formatDate(timestampMs) {
   return new Date(timestampMs).toISOString().slice(0, 10);
+}
+
+function clampToToday(timestampMs) {
+  const now = Date.now();
+  return timestampMs > now ? now : timestampMs;
 }
 
 function missingRate() {

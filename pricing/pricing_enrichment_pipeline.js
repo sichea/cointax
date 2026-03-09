@@ -1,5 +1,5 @@
-import { resolveTransactionPricing } from "./historical_price_resolver.js";
-import { PRICING_SOURCE_MISSING } from "./price_service.js";
+import { resolveTransactionPricing } from "./historical_price_resolver.js?v=b2fe5e0-fxfix";
+import { PRICING_SOURCE_MISSING } from "./price_service.js?v=b2fe5e0-fxfix";
 
 export async function enrichTransactionsWithPricing(unifiedTransactions) {
   let pricedCount = 0;

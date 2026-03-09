@@ -7,8 +7,8 @@ import { parseBinanceTransactionHistoryRows } from "./parsers/binance_transactio
 import { parseBinanceDistributionHistoryRows } from "./parsers/binance_distribution_history_parser.js";
 import { parseBinanceEarnStakingRewardsRows } from "./parsers/binance_earn_staking_rewards_parser.js";
 import { canParseBybit, parseBybitRows } from "./parsers/bybit_parser.js";
-import { buildFxRatesForExport } from "./pricing/fx_rate_service.js";
-import { enrichTransactionsWithPricing } from "./pricing/pricing_enrichment_pipeline.js";
+import { buildFxRatesForExport } from "./pricing/fx_rate_service.js?v=b2fe5e0-fxfix";
+import { enrichTransactionsWithPricing } from "./pricing/pricing_enrichment_pipeline.js?v=b2fe5e0-fxfix";
 import { calculateRealizedProfit } from "./calculators/realized_profit_calculator.js";
 import { buildTaxSummary } from "./reports/tax_summary_report.js";
 import { buildNarrativeTaxReport } from "./reports/narrative_report_builder.js";
@@ -44,7 +44,7 @@ const WALLET_STORAGE_KEY = "tax-evidence-wallets-v1";
 const ONCHAIN_STORAGE_KEY = "tax-evidence-onchain-rows-v1";
 const SYNC_JOBS_STORAGE_KEY = "tax-evidence-wallet-sync-jobs-v1";
 const USER_ID = "demo-user";
-const APP_BUILD_ID = "b2fe5e0";
+const APP_BUILD_ID = "b2fe5e0-fxfix";
 
 const state = {
   unifiedTransactions: [],

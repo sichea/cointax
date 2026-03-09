@@ -1,5 +1,5 @@
-import { resolveUsdtKrwRate, FX_RATE_MISSING } from "./fx_rate_service.js";
-import { PRICING_SOURCE_MISSING, resolveAssetPriceUsdt } from "./price_service.js";
+import { resolveUsdtKrwRate, FX_RATE_MISSING } from "./fx_rate_service.js?v=b2fe5e0-fxfix";
+import { PRICING_SOURCE_MISSING, resolveAssetPriceUsdt } from "./price_service.js?v=b2fe5e0-fxfix";
 
 const STABLE_ASSETS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP", "USD1", "DAI"]);
 
