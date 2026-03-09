@@ -44,6 +44,7 @@ const WALLET_STORAGE_KEY = "tax-evidence-wallets-v1";
 const ONCHAIN_STORAGE_KEY = "tax-evidence-onchain-rows-v1";
 const SYNC_JOBS_STORAGE_KEY = "tax-evidence-wallet-sync-jobs-v1";
 const USER_ID = "demo-user";
+const APP_BUILD_ID = "fa7484f";
 
 const state = {
   unifiedTransactions: [],
@@ -381,6 +382,7 @@ async function handleProcess() {
     setStatus(
       [
         "처리 결과",
+        `- build: ${APP_BUILD_ID}`,
         `- 감지된 파일 유형: ${detectedFileTypes.map((x) => `${x.fileName}=${x.type}`).join("; ") || "없음"}`,
         `- CSV 파싱 행 수: ${parsedRowCount}`,
         `- 동기화된 온체인 행 수: ${syncedOnchainRows.length}`,
@@ -421,6 +423,7 @@ function renderSummary(processing, summary) {
   const counts = processing.eventTypeCounts || {};
   const pricingCard = buildPricingSourceCard(processing.pricing);
   const items = [
+    ["build", APP_BUILD_ID],
     ["CSV 행 수", processing.parsedRowCount],
     ["온체인 행 수", processing.onchainRecordCount],
     ["정규화된 거래 수", processing.normalizedCount],
