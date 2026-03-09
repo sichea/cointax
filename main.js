@@ -362,6 +362,7 @@ async function handleProcess() {
       tax: realized.taxSummary,
       narrativeUnknownCount: narrativeReport.unknown_manual_review.total_unknown_items || 0,
       debugProof: buildDebugProof(unifiedSourceOfTruth, realizedLots, realized.taxSummary),
+      negativeLotTrace: buildNegativeLotTrace(unifiedSourceOfTruth, realizedLots),
     };
 
     renderSummary(state.processing, summary);
@@ -400,6 +401,7 @@ async function handleProcess() {
         `- DeFi 소득: ${format(realized.taxSummary.total_defi_income_krw)} KRW`,
         `- 총 과세대상: ${format(realized.taxSummary.total_taxable_income_krw)} KRW`,
         ...formatDebugProofLines(state.processing.debugProof),
+        ...formatNegativeLotTraceLines(state.processing.negativeLotTrace),
         `- 비과세 내부이동 건수: ${realized.taxSummary.total_non_taxable_transfers}`,
         `- 수동 검토 UNKNOWN 건수: ${realized.taxSummary.unknown_income_events}`,
         `- 내러티브 수동 검토 항목: ${narrativeReport.unknown_manual_review.total_unknown_items || 0}`,
@@ -906,6 +908,50 @@ function formatDebugEntry(entry) {
   return Object.entries(entry)
     .map(([key, value]) => `${key}=${value}`)
     .join(", ");
+}
+
+function buildNegativeLotTrace(unifiedTransactions, realizedLots) {
+  const byId = new Map(unifiedTransactions.map((tx) => [tx.id, tx]));
+  const negativeLots = realizedLots
+    .filter((lot) => Number(lot.profit_krw) < 0)
+    .sort((a, b) => Number(a.profit_krw) - Number(b.profit_krw))
+    .slice(0, 10)
+    .map((lot) => {
+      const buyTx = byId.get(lot.buy_transaction_id) || null;
+      const sellTx = byId.get(lot.sell_transaction_id) || null;
+      return {
+        asset: lot.asset,
+        profit_krw: round(lot.profit_krw),
+        matched_amount: round(lot.matched_amount || lot.sell_amount),
+        buy_transaction_id: lot.buy_transaction_id,
+        sell_transaction_id: lot.sell_transaction_id,
+        buy_event_type: buyTx?.event_type || lot.buy_event_type,
+        sell_event_type: sellTx?.event_type || lot.sell_event_type,
+        buy_asset_in: buyTx?.asset_in || "",
+        buy_amount_in: round(buyTx?.amount_in),
+        buy_asset_out: buyTx?.asset_out || "",
+        buy_amount_out: round(buyTx?.amount_out),
+        sell_asset_in: sellTx?.asset_in || "",
+        sell_amount_in: round(sellTx?.amount_in),
+        sell_asset_out: sellTx?.asset_out || "",
+        sell_amount_out: round(sellTx?.amount_out),
+        buy_price_krw: round(lot.buy_price_krw),
+        sell_price_krw: round(lot.sell_price_krw),
+      };
+    });
+
+  return {
+    negativeLotCount: negativeLots.length,
+    rows: negativeLots,
+  };
+}
+
+function formatNegativeLotTraceLines(trace) {
+  if (!trace || !trace.rows?.length) return ["- negative lot trace: none"];
+  return [
+    `- negative lot trace count: ${trace.negativeLotCount}`,
+    ...trace.rows.map((row, index) => `- negative lot ${index + 1}: ${formatDebugEntry(row)}`),
+  ];
 }
 
 function buildWalletFormMessage(result) {
