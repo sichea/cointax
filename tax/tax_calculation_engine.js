@@ -1,5 +1,5 @@
-import { calculateFifoCapitalGains } from "./fifo_gain_calculator.js?v=f0469f8";
-import { calculateIncomeBuckets } from "./income_calculator.js?v=f0469f8";
+import { calculateFifoCapitalGains } from "./fifo_gain_calculator.js?v=b2fe5e0";
+import { calculateIncomeBuckets } from "./income_calculator.js?v=b2fe5e0";
 
 export function calculateKoreanCryptoTaxes(unifiedTransactions, userId = "demo-user") {
   const fifo = calculateFifoCapitalGains(unifiedTransactions, userId);
