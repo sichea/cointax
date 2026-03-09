@@ -179,7 +179,7 @@ function resolveDisposalUnitPriceUsdt(tx) {
   if (Number.isFinite(proceedsUsdt) && Number.isFinite(quantity) && quantity > 0) {
     return proceedsUsdt / quantity;
   }
-  const proceedsKrw = readFiniteNumber(tx.amount_in_krw) ?? readFiniteNumber(tx.amount_out_krw);
+  const proceedsKrw = firstFiniteNumber(tx.amount_in_krw, tx.amount_out_krw);
   const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
   if (Number.isFinite(proceedsKrw) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
     return proceedsKrw / quantity / fxRate;
@@ -191,7 +191,7 @@ function resolveDisposalUnitPriceKrw(tx) {
   const directPriceKrw = readFiniteNumber(tx.price_krw);
   if (Number.isFinite(directPriceKrw)) return directPriceKrw;
   const quantity = disposalAmount(tx);
-  const proceedsKrw = readFiniteNumber(tx.amount_in_krw) ?? readFiniteNumber(tx.amount_out_krw);
+  const proceedsKrw = firstFiniteNumber(tx.amount_in_krw, tx.amount_out_krw);
   if (Number.isFinite(proceedsKrw) && Number.isFinite(quantity) && quantity > 0) {
     return proceedsKrw / quantity;
   }
@@ -208,6 +208,14 @@ function readFiniteNumber(value) {
   if (typeof value === "string" && value.trim() === "") return NaN;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : NaN;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const numeric = readFiniteNumber(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return NaN;
 }
 
 function round(value) {
