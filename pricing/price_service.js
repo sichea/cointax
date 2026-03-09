@@ -1,65 +1,102 @@
-const DIRECT_PRICE_SOURCE = "HISTORICAL_PRICE_TABLE";
+const BINANCE_KLINES_ENDPOINT = "https://api.binance.com/api/v3/klines";
+
+const DIRECT_PRICE_SOURCE = "TRADE_EXECUTION_PRICE";
+const CANDLE_PRICE_SOURCE_PREFIX = "BINANCE_KLINES";
 const DERIVED_SWAP_SOURCE = "DERIVED_SWAP_RATIO";
 const STABLE_PRICE_SOURCE = "USD_STABLE_PARITY";
 export const PRICING_SOURCE_MISSING = "MISSING";
 
-const ASSET_PRICE_POINTS = [
-  { timestamp: "2026-03-01T00:00:00.000Z", asset: "ETH", price_usdt: 3200, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-02T00:00:00.000Z", asset: "ETH", price_usdt: 3225, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-03T00:00:00.000Z", asset: "ETH", price_usdt: 3185, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-04T00:00:00.000Z", asset: "ETH", price_usdt: 3160, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "ETH", price_usdt: 3210, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-06T00:00:00.000Z", asset: "ETH", price_usdt: 3240, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-01T00:00:00.000Z", asset: "BTC", price_usdt: 64000, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "SOL", price_usdt: 145, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "ARB", price_usdt: 1.85, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-06T00:00:00.000Z", asset: "LP-CRV", price_usdt: 12.5, source: DIRECT_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "USDC", price_usdt: 1, source: STABLE_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "USDT", price_usdt: 1, source: STABLE_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "FDUSD", price_usdt: 1, source: STABLE_PRICE_SOURCE },
-  { timestamp: "2026-03-05T00:00:00.000Z", asset: "DAI", price_usdt: 1, source: STABLE_PRICE_SOURCE },
-];
+const SUPPORTED_BINANCE_SYMBOLS = new Map([
+  ["BTC", "BTCUSDT"],
+  ["ETH", "ETHUSDT"],
+  ["ARB", "ARBUSDT"],
+]);
 
 const STABLE_ASSETS = new Set(["USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP", "USD1", "DAI"]);
+const candleSearchPlans = [
+  { interval: "1m", stepMs: 60 * 1000, searchWindowMs: 30 * 60 * 1000 },
+  { interval: "1h", stepMs: 60 * 60 * 1000, searchWindowMs: 36 * 60 * 60 * 1000 },
+  { interval: "1d", stepMs: 24 * 60 * 60 * 1000, searchWindowMs: 30 * 24 * 60 * 60 * 1000 },
+];
 const cache = new Map();
 
-export function resolveAssetPriceUsdt({ asset, timestamp, tx = null, toleranceMs = 24 * 60 * 60 * 1000 }) {
+export async function resolveAssetPriceUsdt({ asset, timestamp, tx = null }) {
   const symbol = String(asset || "").trim().toUpperCase();
   if (!symbol) return missingPrice(symbol);
 
-  const cacheKey = `${symbol}|${timestamp}`;
+  const targetMs = Date.parse(timestamp);
+  if (!Number.isFinite(targetMs)) return missingPrice(symbol);
+
+  const cacheKey = `${symbol}|${targetMs}|${buildTxPriceCacheKey(tx)}`;
   if (cache.has(cacheKey)) return cache.get(cacheKey);
 
-  let resolved = null;
+  const pending = resolveAssetPriceUsdtUncached({ symbol, timestamp, targetMs, tx }).catch(() => missingPrice(symbol));
+  cache.set(cacheKey, pending);
+  return pending;
+}
 
+export function listAssetPricePoints() {
+  return [];
+}
+
+async function resolveAssetPriceUsdtUncached({ symbol, timestamp, targetMs, tx }) {
   if (STABLE_ASSETS.has(symbol)) {
-    resolved = {
+    return {
       price_usdt: 1,
       pricing_source: STABLE_PRICE_SOURCE,
       price_timestamp: timestamp,
     };
-  } else if (tx && tx.event_type === "SWAP") {
-    resolved = deriveSwapPrice(symbol, tx);
   }
 
-  if (!resolved) {
-    const nearest = findNearestPricePoint(symbol, timestamp, toleranceMs);
+  const directTradePrice = resolveDirectTradePrice(symbol, tx);
+  if (directTradePrice) return directTradePrice;
+
+  if (tx && tx.event_type === "SWAP") {
+    const swapPrice = deriveSwapPrice(symbol, tx);
+    if (swapPrice) return swapPrice;
+  }
+
+  const marketSymbol = SUPPORTED_BINANCE_SYMBOLS.get(symbol);
+  if (!marketSymbol) return missingPrice(symbol);
+
+  for (const plan of candleSearchPlans) {
+    const nearest = await fetchNearestCandlePrice(marketSymbol, targetMs, plan);
     if (nearest) {
-      resolved = {
+      return {
         price_usdt: nearest.price_usdt,
-        pricing_source: nearest.source,
+        pricing_source: `${CANDLE_PRICE_SOURCE_PREFIX}_${plan.interval.toUpperCase()}_NEAREST`,
         price_timestamp: nearest.timestamp,
       };
     }
   }
 
-  if (!resolved) resolved = missingPrice(symbol);
-  cache.set(cacheKey, resolved);
-  return resolved;
+  return missingPrice(symbol);
 }
 
-export function listAssetPricePoints() {
-  return ASSET_PRICE_POINTS.map((row) => ({ ...row }));
+function resolveDirectTradePrice(symbol, tx) {
+  if (!tx || !Number.isFinite(Number(tx.price_usdt))) return null;
+
+  const assetIn = String(tx.asset_in || "").trim().toUpperCase();
+  const assetOut = String(tx.asset_out || "").trim().toUpperCase();
+  const rawPrice = Number(tx.price_usdt);
+
+  if (tx.event_type === "TRADE_BUY" && symbol === assetIn && STABLE_ASSETS.has(assetOut)) {
+    return {
+      price_usdt: rawPrice,
+      pricing_source: DIRECT_PRICE_SOURCE,
+      price_timestamp: tx.timestamp,
+    };
+  }
+
+  if (tx.event_type === "TRADE_SELL" && symbol === assetOut && STABLE_ASSETS.has(assetIn)) {
+    return {
+      price_usdt: rawPrice,
+      pricing_source: DIRECT_PRICE_SOURCE,
+      price_timestamp: tx.timestamp,
+    };
+  }
+
+  return null;
 }
 
 function deriveSwapPrice(symbol, tx) {
@@ -87,21 +124,57 @@ function deriveSwapPrice(symbol, tx) {
   return null;
 }
 
-function findNearestPricePoint(asset, timestamp, toleranceMs) {
-  const target = new Date(timestamp).getTime();
-  if (!Number.isFinite(target)) return null;
+async function fetchNearestCandlePrice(symbol, targetMs, { interval, stepMs, searchWindowMs }) {
+  if (typeof fetch !== "function") return null;
+
+  const startTime = targetMs - searchWindowMs;
+  const endTime = targetMs + searchWindowMs;
+  const limit = Math.min(1000, Math.floor((endTime - startTime) / stepMs) + 1);
+  const query = new URLSearchParams({
+    symbol,
+    interval,
+    startTime: String(startTime),
+    endTime: String(endTime),
+    limit: String(limit),
+  });
+
+  const response = await fetch(`${BINANCE_KLINES_ENDPOINT}?${query.toString()}`);
+  if (!response.ok) return null;
+
+  const candles = await response.json();
+  if (!Array.isArray(candles) || !candles.length) return null;
 
   let best = null;
   let bestDiff = Infinity;
-  for (const row of ASSET_PRICE_POINTS) {
-    if (row.asset !== asset) continue;
-    const diff = Math.abs(new Date(row.timestamp).getTime() - target);
-    if (diff <= toleranceMs && diff < bestDiff) {
-      best = row;
+  for (const candle of candles) {
+    if (!Array.isArray(candle) || candle.length < 5) continue;
+    const openTime = Number(candle[0]);
+    const closePrice = Number(candle[4]);
+    if (!Number.isFinite(openTime) || !Number.isFinite(closePrice)) continue;
+    const diff = Math.abs(openTime - targetMs);
+    if (diff < bestDiff) {
+      best = {
+        price_usdt: closePrice,
+        timestamp: new Date(openTime).toISOString(),
+      };
       bestDiff = diff;
     }
   }
+
   return best;
+}
+
+function buildTxPriceCacheKey(tx) {
+  if (!tx) return "";
+  const pieces = [
+    tx.event_type,
+    tx.asset_in,
+    tx.asset_out,
+    tx.amount_in,
+    tx.amount_out,
+    tx.price_usdt,
+  ];
+  return pieces.map((value) => String(value ?? "")).join("|");
 }
 
 function missingPrice(asset) {

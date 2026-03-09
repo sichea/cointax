@@ -306,7 +306,7 @@ async function handleProcess() {
     const classifiedRows = classifyOnchainUnifiedTransactions(ownershipEnriched);
 
     const transferMatched = matchTransfers(classifiedRows, { userOwnedAddresses: activeWallets });
-    const pricing = enrichTransactionsWithPricing(transferMatched.transactions);
+    const pricing = await enrichTransactionsWithPricing(transferMatched.transactions);
     const realized = calculateRealizedProfit(pricing.transactions, USER_ID);
 
     const matchedUnified = realized.unifiedTransactions.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
@@ -389,10 +389,10 @@ async function handleProcess() {
         `- 미매칭 입금 건수: ${transferMatched.stats.unmatchedDepositCount}`,
         `- 미매칭 출금 건수: ${transferMatched.stats.unmatchedWithdrawalCount}`,
         `- 수동 검토 필요 건수: ${transferMatched.stats.manualReviewRequiredCount}`,
-        `- 가격 계산 완료 건수: ${pricing.summary.pricedCount}`,
-        `- 가격 누락 건수: ${pricing.summary.missingPriceCount}`,
+        `- priced_transactions: ${pricing.summary.priced_transactions}`,
+        `- missing_pricing_count: ${pricing.summary.missing_pricing_count}`,
         `- 환율 적용: ${pricing.summary.fxRateApplied}`,
-        `- 가격 소스: ${pricing.summary.pricingSource}`,
+        `- pricing_source: ${pricing.summary.pricing_source}`,
         `- 자본이득: ${format(realized.taxSummary.total_capital_gain_krw)} KRW`,
         `- 에어드랍 소득: ${format(realized.taxSummary.total_airdrop_income_krw)} KRW`,
         `- 스테이킹 소득: ${format(realized.taxSummary.total_staking_income_krw)} KRW`,
@@ -428,8 +428,9 @@ function renderSummary(processing, summary) {
     ["UNKNOWN", counts.UNKNOWN || 0],
     ["내부 전송 자동 매칭", processing.transferMatching?.matchedInternalTransferCount || 0],
     ["수동 검토 필요", processing.transferMatching?.manualReviewRequiredCount || 0],
-    ["가격 계산 완료", processing.pricing?.pricedCount || 0],
-    ["가격 누락", processing.pricing?.missingPriceCount || 0],
+    ["priced_transactions", processing.pricing?.priced_transactions || 0],
+    ["missing_pricing_count", processing.pricing?.missing_pricing_count || 0],
+    ["pricing_source", processing.pricing?.pricing_source || "MISSING"],
     ["자본이득(KRW)", format(processing.tax?.total_capital_gain_krw || 0)],
     ["에어드랍 소득(KRW)", format(processing.tax?.total_airdrop_income_krw || 0)],
     ["스테이킹 소득(KRW)", format(processing.tax?.total_staking_income_krw || 0)],

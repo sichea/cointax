@@ -2,7 +2,7 @@ import { EVENT_TYPES } from "../classifiers/event_classifier.js";
 import { buildOwnedAddressLookup, describeOwnedAddress } from "../wallets/wallet_registry.js";
 
 const DEFAULT_CONFIG = {
-  matchWindowHours: 72,
+  matchWindowHours: 24,
   absoluteTolerance: 0.000001,
   percentageTolerance: 0.01,
   manualReviewPercentageTolerance: 0.05,
@@ -183,6 +183,7 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup) {
     || (incoming.from_address && outgoing.wallet_address && incoming.from_address === outgoing.wallet_address);
 
   const ownershipEvidence = collectOwnershipEvidence(outgoing, incoming, ownershipLookup);
+  const exchangePairEvidence = collectExchangePairEvidence(outgoing, incoming);
 
   let confidence = null;
   let status = null;
@@ -192,7 +193,31 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup) {
   const withinStrictTolerance = absDiff <= cfg.absoluteTolerance || pctDiff <= cfg.percentageTolerance;
   const withinManualTolerance = pctDiff <= cfg.manualReviewPercentageTolerance;
 
-  if (withinStrictTolerance) {
+  if (exchangePairEvidence.isEligiblePair && withinStrictTolerance) {
+    confidence = hours <= cfg.highConfidenceWindowHours
+      ? TRANSFER_MATCH_CONFIDENCE.HIGH
+      : TRANSFER_MATCH_CONFIDENCE.MEDIUM;
+    status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
+    score = 95 - hours;
+    reason = buildReason(
+      `withdrawal/deposit matched by asset/time/amount, diff=${round(absDiff)}`,
+      hasHashEvidence,
+      hasAddressEvidence,
+      ownershipEvidence.details,
+      exchangePairEvidence.details
+    );
+  } else if (exchangePairEvidence.isEligiblePair && withinManualTolerance) {
+    confidence = TRANSFER_MATCH_CONFIDENCE.MEDIUM;
+    status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
+    score = 85 - hours;
+    reason = buildReason(
+      `fee-adjusted withdrawal/deposit match, diff=${round(absDiff)} (${round(pctDiff * 100)}%)`,
+      hasHashEvidence,
+      hasAddressEvidence,
+      ownershipEvidence.details,
+      exchangePairEvidence.details
+    );
+  } else if (withinStrictTolerance) {
     if (hasHashEvidence || hasAddressEvidence || ownershipEvidence.signalCount > 0) {
       confidence = TRANSFER_MATCH_CONFIDENCE.HIGH;
       status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
@@ -201,13 +226,20 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup) {
         `asset/amount/time aligned with strong evidence, diff=${round(absDiff)}`,
         hasHashEvidence,
         hasAddressEvidence,
-        ownershipEvidence.details
+        ownershipEvidence.details,
+        exchangePairEvidence.details
       );
     } else {
       confidence = TRANSFER_MATCH_CONFIDENCE.MEDIUM;
       status = TRANSFER_MATCH_STATUS.AUTO_MATCHED;
       score = 80 - hours;
-      reason = `asset and amount matched within tolerance, diff=${round(absDiff)}, ${round(hours)}h apart`;
+      reason = buildReason(
+        `asset and amount matched within tolerance, diff=${round(absDiff)}, ${round(hours)}h apart`,
+        hasHashEvidence,
+        hasAddressEvidence,
+        ownershipEvidence.details,
+        exchangePairEvidence.details
+      );
     }
   } else if (withinManualTolerance) {
     if (ownershipEvidence.signalCount > 0 && hours <= cfg.highConfidenceWindowHours) {
@@ -218,7 +250,8 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup) {
         `possible fee-adjusted internal transfer, diff=${round(absDiff)} (${round(pctDiff * 100)}%)`,
         hasHashEvidence,
         hasAddressEvidence,
-        ownershipEvidence.details
+        ownershipEvidence.details,
+        exchangePairEvidence.details
       );
     } else {
       confidence = TRANSFER_MATCH_CONFIDENCE.LOW;
@@ -228,7 +261,8 @@ function scoreCandidate(outgoing, incoming, cfg, inIndex, ownershipLookup) {
         `possible fee-adjusted transfer, diff=${round(absDiff)} (${round(pctDiff * 100)}%)`,
         hasHashEvidence,
         hasAddressEvidence,
-        ownershipEvidence.details
+        ownershipEvidence.details,
+        exchangePairEvidence.details
       );
     }
   } else {
@@ -283,11 +317,31 @@ function collectOwnershipEvidence(outgoing, incoming, ownershipLookup) {
   };
 }
 
-function buildReason(base, hasHashEvidence, hasAddressEvidence, ownershipDetails) {
+function collectExchangePairEvidence(outgoing, incoming) {
+  const withdrawalExchange = getSourceExchange(outgoing);
+  const depositExchange = getSourceExchange(incoming);
+  const isEligiblePair =
+    outgoing.event_type === EVENT_TYPES.WITHDRAWAL
+    && incoming.event_type === EVENT_TYPES.DEPOSIT
+    && Boolean(withdrawalExchange)
+    && Boolean(depositExchange);
+
+  const details = [];
+  if (withdrawalExchange) details.push(`withdrawal source exchange: ${withdrawalExchange}`);
+  if (depositExchange) details.push(`deposit source exchange: ${depositExchange}`);
+
+  return {
+    isEligiblePair,
+    details,
+  };
+}
+
+function buildReason(base, hasHashEvidence, hasAddressEvidence, ownershipDetails, exchangeDetails = []) {
   const extras = [];
   if (hasHashEvidence) extras.push("matching tx hash");
   if (hasAddressEvidence) extras.push("matching address linkage");
   extras.push(...ownershipDetails.map((detail) => `ownership evidence: ${detail}`));
+  extras.push(...exchangeDetails);
   return extras.length ? `${base}; ${extras.join("; ")}` : base;
 }
 
@@ -326,8 +380,8 @@ function buildGroupSummary(groupId, outgoing, incoming, score) {
     transfer_group_id: groupId,
     asset: outgoing.asset_out || incoming.asset_in,
     amount: incoming.amount_in,
-    outgoing_source: outgoing.to_address_label || outgoing.source_name || outgoing.exchange || outgoing.to_address || "",
-    incoming_destination: incoming.from_address_label || incoming.source_name || incoming.exchange || incoming.from_address || "",
+    outgoing_source: getSourceExchange(outgoing) || outgoing.to_address_label || outgoing.source_name || outgoing.exchange || outgoing.to_address || "",
+    incoming_destination: getSourceExchange(incoming) || incoming.from_address_label || incoming.source_name || incoming.exchange || incoming.from_address || "",
     time_difference_hours: round(score.hours),
     confidence: score.confidence,
     transfer_match_status: score.status,
@@ -367,4 +421,14 @@ function buildTransferStats(transactions, groups) {
 function round(value) {
   if (!Number.isFinite(value)) return 0;
   return Math.round((value + Number.EPSILON) * 100000000) / 100000000;
+}
+
+function getSourceExchange(tx) {
+  const exchange = String(tx.exchange || "").trim();
+  if (exchange) return exchange;
+
+  const sourceName = String(tx.source_name || "").trim();
+  if (sourceName.includes("Binance")) return "Binance";
+  if (sourceName.includes("Bybit")) return "Bybit";
+  return "";
 }
