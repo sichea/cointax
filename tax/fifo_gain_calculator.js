@@ -149,10 +149,11 @@ function disposalAmount(tx) {
 }
 
 function resolveAcquisitionUnitPriceUsdt(tx) {
-  if (Number.isFinite(Number(tx.price_usdt))) return Number(tx.price_usdt);
+  const directPriceUsdt = readFiniteNumber(tx.price_usdt);
+  if (Number.isFinite(directPriceUsdt)) return directPriceUsdt;
   const quantity = acquisitionAmount(tx);
-  const total = Number(tx.amount_in_krw);
-  const fxRate = Number(tx.fx_rate_usdt_krw);
+  const total = readFiniteNumber(tx.amount_in_krw);
+  const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
   if (Number.isFinite(total) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
     return total / quantity / fxRate;
   }
@@ -160,9 +161,10 @@ function resolveAcquisitionUnitPriceUsdt(tx) {
 }
 
 function resolveAcquisitionUnitPriceKrw(tx) {
-  if (Number.isFinite(Number(tx.price_krw))) return Number(tx.price_krw);
+  const directPriceKrw = readFiniteNumber(tx.price_krw);
+  if (Number.isFinite(directPriceKrw)) return directPriceKrw;
   const quantity = acquisitionAmount(tx);
-  const total = Number(tx.amount_in_krw);
+  const total = readFiniteNumber(tx.amount_in_krw);
   if (Number.isFinite(total) && Number.isFinite(quantity) && quantity > 0) {
     return total / quantity;
   }
@@ -170,24 +172,41 @@ function resolveAcquisitionUnitPriceKrw(tx) {
 }
 
 function resolveDisposalUnitPriceUsdt(tx) {
-  if (Number.isFinite(Number(tx.price_usdt))) return Number(tx.price_usdt);
+  const directPriceUsdt = readFiniteNumber(tx.price_usdt);
+  if (Number.isFinite(directPriceUsdt)) return directPriceUsdt;
   const quantity = disposalAmount(tx);
-  const proceeds = Number(tx.amount_out_krw);
-  const fxRate = Number(tx.fx_rate_usdt_krw);
-  if (Number.isFinite(proceeds) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
-    return proceeds / quantity / fxRate;
+  const proceedsUsdt = readFiniteNumber(tx.amount_in);
+  if (Number.isFinite(proceedsUsdt) && Number.isFinite(quantity) && quantity > 0) {
+    return proceedsUsdt / quantity;
+  }
+  const proceedsKrw = readFiniteNumber(tx.amount_in_krw) ?? readFiniteNumber(tx.amount_out_krw);
+  const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
+  if (Number.isFinite(proceedsKrw) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
+    return proceedsKrw / quantity / fxRate;
   }
   return NaN;
 }
 
 function resolveDisposalUnitPriceKrw(tx) {
-  if (Number.isFinite(Number(tx.price_krw))) return Number(tx.price_krw);
+  const directPriceKrw = readFiniteNumber(tx.price_krw);
+  if (Number.isFinite(directPriceKrw)) return directPriceKrw;
   const quantity = disposalAmount(tx);
-  const proceeds = Number(tx.amount_out_krw);
-  if (Number.isFinite(proceeds) && Number.isFinite(quantity) && quantity > 0) {
-    return proceeds / quantity;
+  const proceedsKrw = readFiniteNumber(tx.amount_in_krw) ?? readFiniteNumber(tx.amount_out_krw);
+  if (Number.isFinite(proceedsKrw) && Number.isFinite(quantity) && quantity > 0) {
+    return proceedsKrw / quantity;
+  }
+  const proceedsUsdt = readFiniteNumber(tx.amount_in);
+  const fxRate = readFiniteNumber(tx.fx_rate_usdt_krw);
+  if (Number.isFinite(proceedsUsdt) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
+    return (proceedsUsdt * fxRate) / quantity;
   }
   return NaN;
+}
+
+function readFiniteNumber(value) {
+  if (typeof value === "string" && value.trim() === "") return NaN;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : NaN;
 }
 
 function round(value) {
