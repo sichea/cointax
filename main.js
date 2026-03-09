@@ -361,6 +361,7 @@ async function handleProcess() {
       pricing: pricing.summary,
       tax: realized.taxSummary,
       narrativeUnknownCount: narrativeReport.unknown_manual_review.total_unknown_items || 0,
+      debugProof: buildDebugProof(unifiedSourceOfTruth, realizedLots, realized.taxSummary),
     };
 
     renderSummary(state.processing, summary);
@@ -398,6 +399,7 @@ async function handleProcess() {
         `- 스테이킹 소득: ${format(realized.taxSummary.total_staking_income_krw)} KRW`,
         `- DeFi 소득: ${format(realized.taxSummary.total_defi_income_krw)} KRW`,
         `- 총 과세대상: ${format(realized.taxSummary.total_taxable_income_krw)} KRW`,
+        ...formatDebugProofLines(state.processing.debugProof),
         `- 비과세 내부이동 건수: ${realized.taxSummary.total_non_taxable_transfers}`,
         `- 수동 검토 UNKNOWN 건수: ${realized.taxSummary.unknown_income_events}`,
         `- 내러티브 수동 검토 항목: ${narrativeReport.unknown_manual_review.total_unknown_items || 0}`,
@@ -415,6 +417,7 @@ async function handleProcess() {
 
 function renderSummary(processing, summary) {
   const counts = processing.eventTypeCounts || {};
+  const pricingCard = buildPricingSourceCard(processing.pricing);
   const items = [
     ["CSV 행 수", processing.parsedRowCount],
     ["온체인 행 수", processing.onchainRecordCount],
@@ -430,12 +433,12 @@ function renderSummary(processing, summary) {
     ["수동 검토 필요", processing.transferMatching?.manualReviewRequiredCount || 0],
     ["priced_transactions", processing.pricing?.priced_transactions || 0],
     ["missing_pricing_count", processing.pricing?.missing_pricing_count || 0],
-    ["pricing_source", processing.pricing?.pricing_source || "MISSING"],
-    ["자본이득(KRW)", format(processing.tax?.total_capital_gain_krw || 0)],
-    ["에어드랍 소득(KRW)", format(processing.tax?.total_airdrop_income_krw || 0)],
-    ["스테이킹 소득(KRW)", format(processing.tax?.total_staking_income_krw || 0)],
-    ["DeFi 소득(KRW)", format(processing.tax?.total_defi_income_krw || 0)],
-    ["총 과세대상(KRW)", format(processing.tax?.total_taxable_income_krw || 0)],
+    pricingCard,
+    ["capital_gain_krw", format(processing.tax?.capital_gain_krw || 0)],
+    ["airdrop_income_krw", format(processing.tax?.airdrop_income_krw || 0)],
+    ["staking_income_krw", format(processing.tax?.staking_income_krw || 0)],
+    ["defi_income_krw", format(processing.tax?.defi_income_krw || 0)],
+    ["total_taxable_income_krw", format(processing.tax?.total_taxable_income_krw || 0)],
     ["내러티브 수동검토", processing.narrativeUnknownCount || 0],
     ["On-chain SWAP", processing.onchainClassificationCounts?.SWAP || 0],
     ["On-chain AIRDROP", processing.onchainClassificationCounts?.AIRDROP || 0],
@@ -448,8 +451,28 @@ function renderSummary(processing, summary) {
   ];
 
   dom.statsGrid.innerHTML = items
-    .map(([label, value]) => `<div class="stat-item"><div class="label">${escapeHtml(String(label))}</div><div class="value">${escapeHtml(String(value))}</div></div>`)
+    .map((item) => {
+      const [label, value, detail] = Array.isArray(item) ? item : [item.label, item.value, item.detail];
+      const titleAttr = detail ? ` title="${escapeHtml(String(detail))}"` : "";
+      return `<div class="stat-item"${titleAttr}><div class="label">${escapeHtml(String(label))}</div><div class="value">${escapeHtml(String(value))}</div></div>`;
+    })
     .join("");
+}
+
+function buildPricingSourceCard(pricing = {}) {
+  const raw = String(pricing?.pricing_source || "MISSING");
+  if (!raw || raw === "MISSING") return ["pricing_source", "MISSING", "No priced transactions"];
+  const parts = raw.split(",").map((part) => part.trim()).filter(Boolean);
+  const shortLabel = parts.length <= 1 ? classifyPricingSourceLabel(parts[0]) : "Mixed sources";
+  return ["pricing_source", shortLabel, raw];
+}
+
+function classifyPricingSourceLabel(source) {
+  const value = String(source || "");
+  if (value.includes("TRADE_EXECUTION_PRICE")) return "Trade execution price";
+  if (value.includes("BINANCE_KLINES") || value.includes("FRANKFURTER")) return "Historical price service";
+  if (value.includes("USD_STABLE_PARITY")) return "Trade execution price";
+  return "Historical price service";
 }
 
 function renderLedgerPreview(unifiedTransactions) {
@@ -800,6 +823,89 @@ function formatClassificationSummaryLines(counts) {
   return Object.entries(counts)
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([key, value]) => `- On-chain ${key}: ${value}`);
+}
+
+function buildDebugProof(unifiedTransactions, realizedLots, taxSummary) {
+  return {
+    normalizedBuy: pickNormalizedTradeExample(unifiedTransactions, "TRADE_BUY"),
+    normalizedSell: pickNormalizedTradeExample(unifiedTransactions, "TRADE_SELL"),
+    btcFifoMatch: pickLotExample(realizedLots, "BTC"),
+    ethFifoMatch: pickLotExample(realizedLots, "ETH"),
+    airdropValuation: pickIncomeExample(unifiedTransactions, "AIRDROP"),
+    stakingValuation: pickIncomeExample(unifiedTransactions, "STAKING_REWARD"),
+    finalTotals: {
+      capital_gain_krw: taxSummary.capital_gain_krw,
+      airdrop_income_krw: taxSummary.airdrop_income_krw,
+      staking_income_krw: taxSummary.staking_income_krw,
+      defi_income_krw: taxSummary.defi_income_krw,
+      total_taxable_income_krw: taxSummary.total_taxable_income_krw,
+    },
+  };
+}
+
+function pickNormalizedTradeExample(unifiedTransactions, eventType) {
+  const tx = unifiedTransactions.find((row) => row.event_type === eventType);
+  if (!tx) return null;
+  return {
+    id: tx.id,
+    event_type: tx.event_type,
+    asset_in: tx.asset_in,
+    amount_in: round(tx.amount_in),
+    asset_out: tx.asset_out,
+    amount_out: round(tx.amount_out),
+    price_usdt: round(tx.price_usdt),
+    price_krw: round(tx.price_krw),
+    amount_in_krw: round(tx.amount_in_krw),
+    amount_out_krw: round(tx.amount_out_krw),
+  };
+}
+
+function pickLotExample(realizedLots, asset) {
+  const lot = realizedLots.find((row) => row.asset === asset);
+  if (!lot) return null;
+  return {
+    asset: lot.asset,
+    matched_amount: round(lot.matched_amount || lot.sell_amount),
+    buy_price_usdt: round(lot.buy_price_usdt),
+    sell_price_usdt: round(lot.sell_price_usdt),
+    buy_price_krw: round(lot.buy_price_krw),
+    sell_price_krw: round(lot.sell_price_krw),
+    profit_usdt: round(lot.profit_usdt),
+    profit_krw: round(lot.profit_krw),
+  };
+}
+
+function pickIncomeExample(unifiedTransactions, eventType) {
+  const tx = unifiedTransactions.find((row) => row.event_type === eventType && Number.isFinite(Number(row.price_krw)));
+  if (!tx) return null;
+  const receivedAmount = Number(tx.amount_in);
+  const priceKrw = Number(tx.price_krw);
+  return {
+    asset: tx.asset_in,
+    received_amount: round(receivedAmount),
+    price_krw_at_receive: round(priceKrw),
+    income_krw: round(Number.isFinite(receivedAmount) && Number.isFinite(priceKrw) ? receivedAmount * priceKrw : tx.amount_in_krw),
+  };
+}
+
+function formatDebugProofLines(debugProof) {
+  if (!debugProof) return [];
+  return [
+    `- normalized BUY example: ${formatDebugEntry(debugProof.normalizedBuy)}`,
+    `- normalized SELL example: ${formatDebugEntry(debugProof.normalizedSell)}`,
+    `- BTC FIFO match example: ${formatDebugEntry(debugProof.btcFifoMatch)}`,
+    `- ETH FIFO match example: ${formatDebugEntry(debugProof.ethFifoMatch)}`,
+    `- AIRDROP valuation example: ${formatDebugEntry(debugProof.airdropValuation)}`,
+    `- STAKING_REWARD valuation example: ${formatDebugEntry(debugProof.stakingValuation)}`,
+    `- final summary totals: ${formatDebugEntry(debugProof.finalTotals)}`,
+  ];
+}
+
+function formatDebugEntry(entry) {
+  if (!entry) return "not available";
+  return Object.entries(entry)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
 }
 
 function buildWalletFormMessage(result) {

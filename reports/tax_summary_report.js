@@ -4,15 +4,15 @@ export function buildTaxSummary(unifiedTransactions, realizedLots, warnings) {
 
   const totalAirdropIncomeKrw = unifiedTransactions
     .filter((tx) => tx.income_category === "AIRDROP_INCOME")
-    .reduce((sum, tx) => sum + safeNum(tx.amount_in_krw), 0);
+    .reduce((sum, tx) => sum + incomeValueKrw(tx), 0);
 
   const totalStakingIncomeKrw = unifiedTransactions
     .filter((tx) => tx.income_category === "STAKING_INCOME")
-    .reduce((sum, tx) => sum + safeNum(tx.amount_in_krw), 0);
+    .reduce((sum, tx) => sum + incomeValueKrw(tx), 0);
 
   const totalDefiIncomeKrw = unifiedTransactions
     .filter((tx) => tx.income_category === "DEFI_INCOME")
-    .reduce((sum, tx) => sum + safeNum(tx.amount_in_krw), 0);
+    .reduce((sum, tx) => sum + incomeValueKrw(tx), 0);
 
   const totalNonTaxableTransfers = unifiedTransactions.filter((tx) =>
     tx.event_type === "TRANSFER_IN"
@@ -24,6 +24,8 @@ export function buildTaxSummary(unifiedTransactions, realizedLots, warnings) {
 
   const unknownIncomeEvents = unifiedTransactions.filter((tx) => tx.event_type === "UNKNOWN").length;
 
+  const totalTaxableIncomeKrw = totalCapitalGainKrw + totalAirdropIncomeKrw + totalStakingIncomeKrw + totalDefiIncomeKrw;
+
   return {
     totalTransactionCount: unifiedTransactions.length,
     totalTradingProfitUsdt: round(totalCapitalGainUsdt),
@@ -32,11 +34,16 @@ export function buildTaxSummary(unifiedTransactions, realizedLots, warnings) {
     totalTradingProfitKrw: round(totalCapitalGainKrw),
     totalTradingLossKrw: 0,
     netTradingProfitKrw: round(totalCapitalGainKrw),
+    capital_gain_krw: round(totalCapitalGainKrw),
+    airdrop_income_krw: round(totalAirdropIncomeKrw),
+    staking_income_krw: round(totalStakingIncomeKrw),
+    defi_income_krw: round(totalDefiIncomeKrw),
+    total_taxable_income_krw: round(totalTaxableIncomeKrw),
     totalCapitalGainKrw: round(totalCapitalGainKrw),
     totalAirdropIncomeKrw: round(totalAirdropIncomeKrw),
     totalStakingIncomeKrw: round(totalStakingIncomeKrw),
     totalDefiIncomeKrw: round(totalDefiIncomeKrw),
-    totalTaxableAmountKrw: round(totalCapitalGainKrw + totalAirdropIncomeKrw + totalStakingIncomeKrw + totalDefiIncomeKrw),
+    totalTaxableAmountKrw: round(totalTaxableIncomeKrw),
     totalNonTaxableTransfers,
     unknownIncomeEvents,
     pricedTransactionCount: unifiedTransactions.filter((tx) => Number.isFinite(tx.price_krw)).length,
@@ -57,10 +64,10 @@ export function buildTaxSummaryPdf(summary) {
   doc.text(`총 거래 이익 (KRW): ${format(summary.totalTradingProfitKrw)}`, 14, 38);
   doc.text(`총 거래 손실 (KRW): ${format(summary.totalTradingLossKrw)}`, 14, 46);
   doc.text(`순 거래 손익 (KRW): ${format(summary.netTradingProfitKrw)}`, 14, 54);
-  doc.text(`총 에어드랍 소득 (KRW): ${format(summary.totalAirdropIncomeKrw)}`, 14, 62);
-  doc.text(`총 스테이킹 소득 (KRW): ${format(summary.totalStakingIncomeKrw)}`, 14, 70);
-  doc.text(`총 DeFi 소득 (KRW): ${format(summary.totalDefiIncomeKrw)}`, 14, 78);
-  doc.text(`총 과세대상 금액 (KRW): ${format(summary.totalTaxableAmountKrw)}`, 14, 86);
+  doc.text(`총 에어드랍 소득 (KRW): ${format(summary.airdrop_income_krw)}`, 14, 62);
+  doc.text(`총 스테이킹 소득 (KRW): ${format(summary.staking_income_krw)}`, 14, 70);
+  doc.text(`총 DeFi 소득 (KRW): ${format(summary.defi_income_krw)}`, 14, 78);
+  doc.text(`총 과세대상 금액 (KRW): ${format(summary.total_taxable_income_krw)}`, 14, 86);
   doc.text(`비과세 내부이동 건수: ${summary.totalNonTaxableTransfers}`, 14, 94);
   doc.text(`수동 검토 필요 UNKNOWN 건수: ${summary.unknownIncomeEvents}`, 14, 102);
   doc.text(`가격 계산 완료 건수: ${summary.pricedTransactionCount}`, 14, 110);
@@ -80,6 +87,15 @@ export function buildTaxSummaryPdf(summary) {
 
 function safeNum(value) {
   return Number.isFinite(value) ? value : 0;
+}
+
+function incomeValueKrw(tx) {
+  const amount = Number(tx.amount_in);
+  const priceKrw = Number(tx.price_krw);
+  if (Number.isFinite(amount) && amount > 0 && Number.isFinite(priceKrw)) {
+    return amount * priceKrw;
+  }
+  return safeNum(Number(tx.amount_in_krw));
 }
 
 function round(value) {

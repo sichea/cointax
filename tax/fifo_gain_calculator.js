@@ -35,8 +35,8 @@ export function calculateFifoCapitalGains(unifiedTransactions, userId = "demo-us
     if (!inventory.has(asset)) inventory.set(asset, []);
     const queue = inventory.get(asset);
     let remaining = quantity;
-    const unitSellPriceKrw = disposalProceedsKrw(tx) / quantity;
-    const unitSellPriceUsdt = disposalProceedsUsdt(tx) / quantity;
+    const unitSellPriceUsdt = resolveDisposalUnitPriceUsdt(tx);
+    const unitSellPriceKrw = resolveDisposalUnitPriceKrw(tx);
 
     while (remaining > 0 && queue.length > 0) {
       const lot = queue[0];
@@ -57,12 +57,13 @@ export function calculateFifoCapitalGains(unifiedTransactions, userId = "demo-us
         sell_source: tx.source_name || tx.exchange || tx.wallet_address,
         buy_amount: matched,
         sell_amount: matched,
+        matched_amount: matched,
         buy_price_usdt: lot.unit_cost_usdt,
         sell_price_usdt: unitSellPriceUsdt,
         buy_price_krw: lot.unit_cost_krw,
         sell_price_krw: unitSellPriceKrw,
         profit_usdt: matched * (unitSellPriceUsdt - lot.unit_cost_usdt),
-        profit_krw: matched * (unitSellPriceKrw - lot.unit_cost_krw),
+        profit_krw: (unitSellPriceKrw - lot.unit_cost_krw) * matched,
         buy_pricing_source: lot.pricing_source,
         sell_pricing_source: tx.pricing_source || "",
         calculation_method: "FIFO",
@@ -100,6 +101,10 @@ function enqueueAcquisition(tx, inventory) {
   const quantity = acquisitionAmount(tx);
   if (!asset || !Number.isFinite(quantity) || quantity <= 0) return;
 
+  const unitCostUsdt = resolveAcquisitionUnitPriceUsdt(tx);
+  const unitCostKrw = resolveAcquisitionUnitPriceKrw(tx);
+  if (!Number.isFinite(unitCostUsdt) && !Number.isFinite(unitCostKrw)) return;
+
   const queue = inventory.get(asset) || [];
   queue.push({
     lot_id: `LOT-${tx.id}`,
@@ -108,8 +113,8 @@ function enqueueAcquisition(tx, inventory) {
     timestamp: tx.timestamp,
     source: tx.source_name || tx.exchange || tx.wallet_address,
     remaining: quantity,
-    unit_cost_usdt: acquisitionCostUsdt(tx) / quantity,
-    unit_cost_krw: acquisitionCostKrw(tx) / quantity,
+    unit_cost_usdt: unitCostUsdt,
+    unit_cost_krw: unitCostKrw,
     pricing_source: tx.pricing_source || "",
   });
   inventory.set(asset, queue);
@@ -128,22 +133,11 @@ function isDisposal(tx) {
 }
 
 function acquisitionAsset(tx) {
-  if (tx.event_type === EVENT_TYPES.TRADE_BUY) return tx.asset_in;
   return tx.asset_in;
 }
 
 function acquisitionAmount(tx) {
   return Number(tx.amount_in);
-}
-
-function acquisitionCostUsdt(tx) {
-  if (tx.event_type === EVENT_TYPES.TRADE_BUY) return safeNum(tx.amount_out) * perUnitPriceUsdt(tx, tx.asset_out);
-  return safeNum(tx.amount_in) * safeNum(tx.price_usdt);
-}
-
-function acquisitionCostKrw(tx) {
-  if (tx.event_type === EVENT_TYPES.TRADE_BUY) return safeNum(tx.amount_in_krw);
-  return safeNum(tx.amount_in_krw);
 }
 
 function disposalAsset(tx) {
@@ -154,30 +148,46 @@ function disposalAmount(tx) {
   return Number(tx.amount_out);
 }
 
-function disposalProceedsUsdt(tx) {
-  if (tx.event_type === EVENT_TYPES.TRADE_SELL) {
-    return safeNum(tx.amount_in) * perUnitPriceUsdt(tx, tx.asset_in);
+function resolveAcquisitionUnitPriceUsdt(tx) {
+  if (Number.isFinite(Number(tx.price_usdt))) return Number(tx.price_usdt);
+  const quantity = acquisitionAmount(tx);
+  const total = Number(tx.amount_in_krw);
+  const fxRate = Number(tx.fx_rate_usdt_krw);
+  if (Number.isFinite(total) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
+    return total / quantity / fxRate;
   }
-  return safeNum(tx.amount_out) * safeNum(tx.price_usdt);
+  return NaN;
 }
 
-function disposalProceedsKrw(tx) {
-  if (tx.event_type === EVENT_TYPES.TRADE_SELL) {
-    return safeNum(tx.amount_in_krw);
+function resolveAcquisitionUnitPriceKrw(tx) {
+  if (Number.isFinite(Number(tx.price_krw))) return Number(tx.price_krw);
+  const quantity = acquisitionAmount(tx);
+  const total = Number(tx.amount_in_krw);
+  if (Number.isFinite(total) && Number.isFinite(quantity) && quantity > 0) {
+    return total / quantity;
   }
-  return safeNum(tx.amount_out_krw);
+  return NaN;
 }
 
-function perUnitPriceUsdt(tx, asset) {
-  const symbol = String(asset || "").toUpperCase();
-  if (symbol === "USDT" || symbol === "USDC" || symbol === "BUSD" || symbol === "FDUSD" || symbol === "DAI") {
-    return 1;
+function resolveDisposalUnitPriceUsdt(tx) {
+  if (Number.isFinite(Number(tx.price_usdt))) return Number(tx.price_usdt);
+  const quantity = disposalAmount(tx);
+  const proceeds = Number(tx.amount_out_krw);
+  const fxRate = Number(tx.fx_rate_usdt_krw);
+  if (Number.isFinite(proceeds) && Number.isFinite(quantity) && quantity > 0 && Number.isFinite(fxRate) && fxRate > 0) {
+    return proceeds / quantity / fxRate;
   }
-  return safeNum(tx.price_usdt);
+  return NaN;
 }
 
-function safeNum(value) {
-  return Number.isFinite(Number(value)) ? Number(value) : 0;
+function resolveDisposalUnitPriceKrw(tx) {
+  if (Number.isFinite(Number(tx.price_krw))) return Number(tx.price_krw);
+  const quantity = disposalAmount(tx);
+  const proceeds = Number(tx.amount_out_krw);
+  if (Number.isFinite(proceeds) && Number.isFinite(quantity) && quantity > 0) {
+    return proceeds / quantity;
+  }
+  return NaN;
 }
 
 function round(value) {

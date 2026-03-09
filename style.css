@@ -182,7 +182,14 @@ input[type="file"] { min-width: 270px; }
 }
 
 .stat-item .label { font-size: 0.82rem; color: var(--muted); }
-.stat-item .value { font-size: 1.1rem; font-weight: 800; margin-top: 4px; }
+.stat-item .value {
+  font-size: 1.1rem;
+  font-weight: 800;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .table-wrap { overflow-x: auto; }
 
 table { width: 100%; border-collapse: collapse; }

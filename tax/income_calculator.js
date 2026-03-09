@@ -14,9 +14,9 @@ export function calculateIncomeBuckets(unifiedTransactions) {
   );
 
   return {
-    airdropIncomeKrw: sumAmount(airdropRows, "amount_in_krw"),
-    stakingIncomeKrw: sumAmount(stakingRows, "amount_in_krw"),
-    defiIncomeKrw: sumAmount(defiRows, "amount_in_krw"),
+    airdropIncomeKrw: sumIncomeValue(airdropRows),
+    stakingIncomeKrw: sumIncomeValue(stakingRows),
+    defiIncomeKrw: sumIncomeValue(defiRows),
     totalNonTaxableTransfers: nonTaxableTransfers.length,
     unknownIncomeEvents: unknownIncomeEvents.length,
   };
@@ -24,4 +24,20 @@ export function calculateIncomeBuckets(unifiedTransactions) {
 
 function sumAmount(rows, field) {
   return rows.reduce((sum, row) => sum + (Number.isFinite(Number(row[field])) ? Number(row[field]) : 0), 0);
+}
+
+function sumIncomeValue(rows) {
+  return rows.reduce((sum, row) => {
+    const receivedAmount = Number(row.amount_in);
+    const priceKrw = Number(row.price_krw);
+    if (Number.isFinite(receivedAmount) && receivedAmount > 0 && Number.isFinite(priceKrw)) {
+      return sum + (receivedAmount * priceKrw);
+    }
+
+    if (Number.isFinite(Number(row.amount_in_krw))) {
+      return sum + Number(row.amount_in_krw);
+    }
+
+    return sum;
+  }, 0);
 }
