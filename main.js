@@ -44,7 +44,7 @@ const WALLET_STORAGE_KEY = "tax-evidence-wallets-v1";
 const ONCHAIN_STORAGE_KEY = "tax-evidence-onchain-rows-v1";
 const SYNC_JOBS_STORAGE_KEY = "tax-evidence-wallet-sync-jobs-v1";
 const USER_ID = "demo-user";
-const APP_BUILD_ID = "afcb439";
+const APP_BUILD_ID = "f0469f8";
 
 const state = {
   unifiedTransactions: [],
